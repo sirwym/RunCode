@@ -32,5 +32,5 @@ logo_processed.png
 
 # TDM-GCC 解压目录（构建时自动下载，不提交）
 # 仅保留 .gitkeep 占位，确保 macOS 构建时 tauri.conf.json 的 resources 配置有效
-src-tauri/resources/mingw64/*
-!src-tauri/resources/mingw64/.gitkeep
+src-tauri/resources/tdm-gcc/*
+!src-tauri/resources/tdm-gcc/.gitkeep

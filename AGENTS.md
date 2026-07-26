@@ -22,7 +22,7 @@ RunCode 是一个轻量级跨平台 C++ 教学编辑器（macOS + Windows），�
 - `src-tauri/src/runner/unix.rs` — Unix 平台执行实现（process_group + setrlimit）
 - `src-tauri/src/runner/windows.rs` — Windows 平台执行实现（JobObject + CPU 时间限制）
 - `src-tauri/src/parser/` — tree-sitter 代码解析
-- `src-tauri/resources/mingw64/` — Windows 内置 TDM-GCC（构建时自动下载，不提交）
+- `src-tauri/resources/tdm-gcc/` — Windows 内置 TDM-GCC（构建时自动下载，不提交）
 - `src/components/` — React 组件
 - `src/hooks/` — Zustand store hooks
 - `src/locales/` — i18n 文案（zh / en）

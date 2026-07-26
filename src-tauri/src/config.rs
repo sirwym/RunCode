@@ -53,7 +53,7 @@ fn detect_compiler() -> Result<PathBuf, AppError> {
     }
     #[cfg(windows)]
     {
-        // 1. 优先用打包的 TDM-GCC（resource_dir/mingw64/bin/g++.exe）
+        // 1. 优先用打包的 TDM-GCC（resource_dir/tdm-gcc/bin/g++.exe）
         if let Some(bundled) = find_bundled_mingw() {
             return Ok(bundled);
         }
@@ -72,29 +72,29 @@ fn detect_compiler() -> Result<PathBuf, AppError> {
 /// - 开发模式：`target/debug/`
 /// - 安装版：`exe 同级目录/resources/`
 ///
-/// 本函数尝试三个路径查找 `mingw64/bin/g++.exe`。
+/// 本函数尝试三个路径查找 `tdm-gcc/bin/g++.exe`。
 #[cfg(windows)]
 fn find_bundled_mingw() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
 
-    // 候选路径 1：exe_dir/resources/mingw64/bin/g++.exe（安装版）
-    let candidate1 = exe_dir.join("resources").join("mingw64").join("bin").join("g++.exe");
+    // 候选路径 1：exe_dir/resources/tdm-gcc/bin/g++.exe（安装版）
+    let candidate1 = exe_dir.join("resources").join("tdm-gcc").join("bin").join("g++.exe");
     if candidate1.exists() {
         return Some(candidate1);
     }
 
-    // 候选路径 2：exe_dir/mingw64/bin/g++.exe（开发模式，资源在 target/debug/）
-    let candidate2 = exe_dir.join("mingw64").join("bin").join("g++.exe");
+    // 候选路径 2：exe_dir/tdm-gcc/bin/g++.exe（开发模式，资源在 target/debug/）
+    let candidate2 = exe_dir.join("tdm-gcc").join("bin").join("g++.exe");
     if candidate2.exists() {
         return Some(candidate2);
     }
 
-    // 候选路径 3：CARGO_MANIFEST_DIR/resources/mingw64/bin/g++.exe（cargo test 路径）
+    // 候选路径 3：CARGO_MANIFEST_DIR/resources/tdm-gcc/bin/g++.exe（cargo test 路径）
     // CARGO_MANIFEST_DIR 是编译期常量，指向 src-tauri/ 目录。
     // 仅开发/测试时生效，生产环境（安装版）不影响。
     let candidate3 = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources")
-        .join("mingw64")
+        .join("tdm-gcc")
         .join("bin")
         .join("g++.exe");
     if candidate3.exists() {

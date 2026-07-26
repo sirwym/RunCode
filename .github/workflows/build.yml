@@ -62,7 +62,7 @@ jobs:
       - name: Cache TDM-GCC
         uses: actions/cache@v4
         with:
-          path: src-tauri/resources/mingw64
+          path: src-tauri/resources/tdm-gcc
           key: tdm-gcc-10.3.0-2-v1
 
       - name: Prepare TDM-GCC
@@ -70,7 +70,7 @@ jobs:
         shell: pwsh
 
       - name: Add TDM-GCC to PATH
-        run: echo "$PWD\src-tauri\resources\mingw64\bin" >> $env:GITHUB_PATH
+        run: echo "$PWD\src-tauri\resources\tdm-gcc\bin" >> $env:GITHUB_PATH
         shell: pwsh
 
       - name: Frontend test (Vitest)

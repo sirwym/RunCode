@@ -138,7 +138,7 @@ xcrun notarytool log <submission-id> --apple-id "$APPLE_ID" --password "$APPLE_P
 ```
 
 脚本会自动：
-1. 准备 TDM-GCC（若 `src-tauri/resources/mingw64/bin/g++.exe` 不存在则下载精简）
+1. 准备 TDM-GCC（若 `src-tauri/resources/tdm-gcc/bin/g++.exe` 不存在则下载精简）
 2. 构建前端（`pnpm build`）
 3. 构建 Tauri NSIS 安装包（`pnpm tauri build`）
 4. 输出产物路径和体积

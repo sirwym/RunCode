@@ -2,7 +2,7 @@
 # RunCode Windows 一键构建脚本
 #
 # 流程：
-#   1. 准备 TDM-GCC（若 resources/mingw64/ 不存在则下载精简）
+#   1. 准备 TDM-GCC（若 resources/tdm-gcc/ 不存在则下载精简）
 #   2. 构建前端（pnpm build）
 #   3. 构建 Tauri NSIS 安装包（pnpm tauri build）
 #   4. 输出产物路径和体积
@@ -19,8 +19,8 @@ cd "$(split-path $myinvocation.mycommand.path -parent)/.."
 write-host "=== RunCode Windows 构建脚本 ===" -foregroundcolor cyan
 write-host ""
 
-# 1. 准备 TDM-GCC（若 resources/mingw64/bin/g++.exe 不存在则下载）
-$gppPath = "src-tauri/resources/mingw64/bin/g++.exe"
+# 1. 准备 TDM-GCC（若 resources/tdm-gcc/bin/g++.exe 不存在则下载）
+$gppPath = "src-tauri/resources/tdm-gcc/bin/g++.exe"
 if (-not (test-path $gppPath)) {
     write-host "=== 准备 TDM-GCC ===" -foregroundcolor yellow
     ./scripts/prepare-tdm-gcc.ps1
