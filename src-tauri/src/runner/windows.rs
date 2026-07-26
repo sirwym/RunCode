@@ -245,9 +245,13 @@ fn assign_process_to_job(h_job: HANDLE, pid: u32) -> Result<(), AppError> {
                 detail: format!("OpenProcess({pid}) 失败: {e}"),
             })?;
 
-        AssignProcessToJobObject(h_job, h_process).map_err(|e| AppError::Other {
-            detail: format!("AssignProcessToJobObject 失败: {e}"),
-        })?;
+        // AssignProcessToJobObject 在某些环境（如 GitHub Actions runner 运行在
+        // 父 JobObject 中且不允许 breakaway）会返回 ERROR_ACCESS_DENIED。
+        // 此时 CPU 时间限制失效，但墙钟超时仍能防死循环，足够教学场景使用。
+        // 普通用户机器（不处于 JobObject 中）不受影响，CPU 限制正常。
+        if let Err(e) = AssignProcessToJobObject(h_job, h_process) {
+            eprintln!("警告: AssignProcessToJobObject 失败 ({e}), CPU 限制将不生效");
+        }
 
         let _ = CloseHandle(h_process);
         Ok(())
