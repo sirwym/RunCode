@@ -1,0 +1,34 @@
+/* Tailwind CSS 4 入口：映射现有 CSS 变量到 Tailwind 主题 token */
+@import "tailwindcss";
+
+/* 映射 global.css 的 CSS 变量到 Tailwind 主题 token */
+@theme inline {
+  /* 颜色（对应 global.css 的变量） */
+  --color-bg: var(--bg);
+  --color-panel-bg: var(--panel-bg);
+  --color-panel-bg-alt: var(--panel-bg-alt);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-success: var(--success);
+  --color-error: var(--error);
+  --color-warning: var(--warning);
+
+  /* 字体 */
+  --font-ui: var(--font-ui);
+  --font-mono: var(--font-mono);
+
+  /* 圆角（Lyra 全直角，与 global.css 保持一致） */
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-pill: 0px;
+
+  /* 间距 */
+  --spacing-xs: var(--space-xs);
+  --spacing-sm: var(--space-sm);
+  --spacing-md: var(--space-md);
+  --spacing-lg: var(--space-lg);
+}

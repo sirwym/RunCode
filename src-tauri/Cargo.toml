@@ -1,0 +1,38 @@
+[package]
+name = "cppteach"
+version = "0.1.0"
+description = "RunCode IDE"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "tauri_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+portable-pty = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+which = "6"
+uuid = { version = "1", features = ["v4"] }
+thiserror = "1"
+libc = "0.2"
+zip = "2"
+walkdir = "2"
+tree-sitter = "0.22"
+tree-sitter-cpp = "0.22"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+

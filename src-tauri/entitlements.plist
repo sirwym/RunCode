@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened Runtime 基础权限 -->
+
+    <!-- 允许 JIT 编译（Monaco 编辑器 / V8 需要） -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- 允许加载未签名的可执行内存（V8 / WebAssembly 需要） -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- 允许 DYLD 环境变量（开发调试用，发布可关） -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <false/>
+
+    <!-- 允许调试器附加（发布时设为 false） -->
+    <key>com.apple.security.get-task-allow</key>
+    <false/>
+
+    <!-- 网络访问（PTY / 编译器调用不需要，保留以备后续网络功能） -->
+    <key>com.apple.security.network.client</key>
+    <false/>
+    <key>com.apple.security.network.server</key>
+    <false/>
+
+    <!-- 文件访问：用户授权的文件（通过 dialog 打开/保存） -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>
