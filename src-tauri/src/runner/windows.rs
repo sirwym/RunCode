@@ -120,12 +120,14 @@ pub async fn run_with_limits(
             }
             _ = tokio::time::sleep(timeout) => {
                 terminate_job(h_job.0);
+                let _ = child.start_kill();
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Timeout);
                 None
             }
             _ = &mut cancel_rx => {
                 terminate_job(h_job.0);
+                let _ = child.start_kill();
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Cancelled);
                 None
@@ -139,6 +141,7 @@ pub async fn run_with_limits(
             }
             _ = tokio::time::sleep(timeout) => {
                 terminate_job(h_job.0);
+                let _ = child.start_kill();
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Timeout);
                 None

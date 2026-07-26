@@ -72,7 +72,7 @@ fn detect_compiler() -> Result<PathBuf, AppError> {
 /// - 开发模式：`target/debug/`
 /// - 安装版：`exe 同级目录/resources/`
 ///
-/// 本函数尝试两个路径查找 `mingw64/bin/g++.exe`。
+/// 本函数尝试三个路径查找 `mingw64/bin/g++.exe`。
 #[cfg(windows)]
 fn find_bundled_mingw() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
@@ -87,6 +87,18 @@ fn find_bundled_mingw() -> Option<PathBuf> {
     let candidate2 = exe_dir.join("mingw64").join("bin").join("g++.exe");
     if candidate2.exists() {
         return Some(candidate2);
+    }
+
+    // 候选路径 3：CARGO_MANIFEST_DIR/resources/mingw64/bin/g++.exe（cargo test 路径）
+    // CARGO_MANIFEST_DIR 是编译期常量，指向 src-tauri/ 目录。
+    // 仅开发/测试时生效，生产环境（安装版）不影响。
+    let candidate3 = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("mingw64")
+        .join("bin")
+        .join("g++.exe");
+    if candidate3.exists() {
+        return Some(candidate3);
     }
 
     None

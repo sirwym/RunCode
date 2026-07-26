@@ -59,12 +59,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Frontend test (Vitest)
-        run: pnpm test
-
-      - name: Backend test (cargo test)
-        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
-
       - name: Cache TDM-GCC
         uses: actions/cache@v4
         with:
@@ -74,6 +68,16 @@ jobs:
       - name: Prepare TDM-GCC
         run: ./scripts/prepare-tdm-gcc.ps1
         shell: pwsh
+
+      - name: Add TDM-GCC to PATH
+        run: echo "$PWD\src-tauri\resources\mingw64\bin" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Frontend test (Vitest)
+        run: pnpm test
+
+      - name: Backend test (cargo test)
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 
       - name: Build NSIS installer
         run: ./scripts/build-windows.ps1
