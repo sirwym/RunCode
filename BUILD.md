@@ -1,23 +1,25 @@
-# macOS 签名与公证配置指南
+# 构建与签名指南（macOS + Windows）
 
-本文档说明如何为 C++ 教学编辑器配置 Developer ID 签名和 Apple 公证，实现正式分发。
+本文档说明如何为 RunCode 构建 macOS DMG 和 Windows NSIS 安装包，并配置代码签名与公证。
 
-## 当前状态
+## macOS 构建
+
+### 当前状态
 
 - **签名方式**：ad-hoc（`signingIdentity: "-"`）
 - **Hardened Runtime**：已启用（`entitlements.plist`）
 - **首次启动**：需右键 → 打开以绕过 Gatekeeper
 - **正式分发**：❌ 未配置（需要 Apple Developer 账号）
 
-## 升级到正式签名
+### 升级到正式签名
 
-### 1. 申请 Apple Developer 账号
+#### 1. 申请 Apple Developer 账号
 
 1. 访问 https://developer.apple.com/programs/
 2. 注册 Apple Developer Program（$99/年）
 3. 完成身份验证
 
-### 2. 创建 Developer ID 证书
+#### 2. 创建 Developer ID 证书
 
 1. 登录 https://developer.apple.com/account/
 2. Certificates, Identifiers & Profiles → Certificates → +
@@ -31,7 +33,7 @@
 security find-identity -v -p codesigning | grep "Developer ID"
 ```
 
-### 3. 获取公证所需信息
+#### 3. 获取公证所需信息
 
 | 环境变量 | 说明 | 获取方式 |
 |---------|------|---------|
@@ -40,7 +42,7 @@ security find-identity -v -p codesigning | grep "Developer ID"
 | `APPLE_PASSWORD` | app-specific 密码 | https://appleid.apple.com → 登录 → 应用专用密码 → 生成 |
 | `APPLE_TEAM_ID` | Team ID | https://developer.apple.com/account → Membership Details |
 
-### 4. 配置环境变量
+#### 4. 配置环境变量
 
 在 `~/.zshrc` 或 `~/.bash_profile` 中添加：
 
@@ -53,7 +55,7 @@ export APPLE_TEAM_ID="XXXXXXXXXX"
 
 > ⚠️ 不要将这些凭据提交到版本控制。建议使用 macOS 钥匙串或环境变量管理工具。
 
-### 5. 执行正式构建
+#### 5. 执行正式构建
 
 ```bash
 ./scripts/build-signed.sh
@@ -66,19 +68,19 @@ export APPLE_TEAM_ID="XXXXXXXXXX"
 4. 执行 `pnpm tauri build`（Tauri 2 内置公证）
 5. 验证 Gatekeeper 和 Stapler
 
-### 6. 验证分发
+#### 6. 验证分发
 
 ```bash
 # Gatekeeper 验证
-spctl --assess --type install --verbose "CppTeach_0.1.0_aarch64.dmg"
+spctl --assess --type install --verbose "RunCode_0.1.0_aarch64.dmg"
 
 # Stapler 验证
-xcrun stapler validate "CppTeach_0.1.0_aarch64.dmg"
+xcrun stapler validate "RunCode_0.1.0_aarch64.dmg"
 ```
 
 通过后，用户可双击 DMG 直接安装，无需右键打开。
 
-## Entitlements 说明
+### Entitlements 说明
 
 `src-tauri/entitlements.plist` 配置了 Hardened Runtime 权限：
 
@@ -92,16 +94,16 @@ xcrun stapler validate "CppTeach_0.1.0_aarch64.dmg"
 | `com.apple.security.network.server` | false | 不需要网络 |
 | `com.apple.security.files.user-selected.read-write` | true | 用户通过 dialog 选择的文件 |
 
-## 构建脚本说明
+### 构建脚本说明
 
 | 脚本 | 用途 | 签名方式 |
 |------|------|---------|
 | `scripts/build-dev.sh` | 本机开发/测试 | ad-hoc |
 | `scripts/build-signed.sh` | 正式分发 | Developer ID + 公证 |
 
-## 故障排查
+### 故障排查
 
-### 证书未找到
+#### 证书未找到
 ```bash
 # 查看所有代码签名证书
 security find-identity -v -p codesigning
@@ -110,7 +112,7 @@ security find-identity -v -p codesigning
 # 钥匙串访问 → 证书 → 双击 → 信任 → 始终信任
 ```
 
-### 公证失败
+#### 公证失败
 ```bash
 # 查看公证状态
 xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID"
@@ -119,15 +121,67 @@ xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --t
 xcrun notarytool log <submission-id> --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID"
 ```
 
-### Gatekeeper 验证失败
+#### Gatekeeper 验证失败
 - 公证完成后需要等待 5-10 分钟传播
 - 使用 `xcrun stapler staple` 附加公证票据：
   ```bash
-  xcrun stapler staple "CppTeach.app"
-  xcrun stapler staple "CppTeach_0.1.0_aarch64.dmg"
+  xcrun stapler staple "RunCode.app"
+  xcrun stapler staple "RunCode_0.1.0_aarch64.dmg"
   ```
 
+## Windows 构建
+
+### 开发构建（NSIS 安装包）
+
+```powershell
+./scripts/build-windows.ps1
+```
+
+脚本会自动：
+1. 准备 TDM-GCC（若 `src-tauri/resources/mingw64/bin/g++.exe` 不存在则下载精简）
+2. 构建前端（`pnpm build`）
+3. 构建 Tauri NSIS 安装包（`pnpm tauri build`）
+4. 输出产物路径和体积
+
+产出：`src-tauri/target/release/bundle/nsis/RunCode_0.1.0_x64-setup.exe`
+
+预估体积：~50 MB（RunCode 10MB + TDM-GCC 精简后 ~40MB）
+
+### TDM-GCC 维护
+
+- **当前版本**：TDM-GCC 10.3.0-2 (tdm64)
+- **下载源**：https://github.com/jmeubank/tdm-gcc/releases
+- **官方网站**：https://jmeubank.github.io/tdm-gcc/
+- **升级流程**：修改 `scripts/prepare-tdm-gcc.ps1` 中的 `TDM_URL` 和 `TDM_VERSION`，重新执行构建脚本
+- **精简策略**：删 GDB（~15MB）、删 mingw32-make（~2MB）、删文档/locale/man
+
+许可证：
+- **GCC/binutils**：GPLv3+，见 [LICENSES/TDM-GCC-GPLv3.txt](./LICENSES/TDM-GCC-GPLv3.txt)
+- **libstdc++**：GCC Runtime Library Exception（用户编译的程序不感染 GPL）
+- **mingw-w64 runtime**：BSD/ZPL 等，见 [LICENSES/TDM-GCC-runtime.txt](./LICENSES/TDM-GCC-runtime.txt)
+
+### Authenticode 签名（可选）
+
+教学场景可不做。Windows SmartScreen 会显示警告，用户点「仍要运行」即可安装。
+
+如需签名（消除 SmartScreen 警告）：
+1. 购买 OV（组织验证）代码签名证书（约 $200/年）
+2. 安装证书到本地证书存储
+3. 用 `signtool.exe` 签名安装包：
+   ```powershell
+   signtool.exe sign /a /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+     "src-tauri/target/release/bundle/nsis/RunCode_0.1.0_x64-setup.exe"
+   ```
+4. 验证签名：
+   ```powershell
+   signtool.exe verify /pa /v "RunCode_0.1.0_x64-setup.exe"
+   ```
+
+> 注：2023 年 6 月起，新的 OV 证书需要 Hardware Root of Trust（USB token），EV 证书可直接 USB token。教学场景建议直接跳过签名。
+
 ## 多架构构建（未来扩展）
+
+### macOS 通用二进制
 
 当前仅构建 aarch64。如需 Intel 支持：
 
@@ -140,3 +194,7 @@ pnpm tauri build --target universal-apple-darwin
 ```
 
 通用二进制会增加体积约 2x，但可在 Intel 和 Apple Silicon 上运行。
+
+### Windows ARM64
+
+TDM-GCC 暂不支持 ARM64。如需 ARM64 支持，可改用 LLVM MinGW（experimental）或微软 Visual Studio Build Tools。

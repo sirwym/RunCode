@@ -64,8 +64,13 @@ pub async fn compile_only(
     let main_cpp = work_dir.join("main.cpp");
     std::fs::write(&main_cpp, code)?;
 
-    // 编译：clang++ <compile_args> -o main main.cpp
-    let exe_path = work_dir.join("main");
+    // 编译：clang++/g++ <compile_args> -o main main.cpp
+    // Windows 可执行文件需 .exe 后缀
+    #[cfg(unix)]
+    let exe_name = "main";
+    #[cfg(windows)]
+    let exe_name = "main.exe";
+    let exe_path = work_dir.join(exe_name);
     let mut compile_cmd: Vec<String> = vec![config.compiler_path.to_string_lossy().into_owned()];
     compile_cmd.extend(config.compile_args.iter().cloned());
     compile_cmd.push("-o".into());

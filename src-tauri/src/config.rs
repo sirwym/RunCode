@@ -25,11 +25,7 @@ impl CompilerConfig {
         // 编译器路径：settings 优先，None 则自动探测
         let compiler_path = match &settings.compiler.compiler_path {
             Some(p) if !p.is_empty() => PathBuf::from(p),
-            _ => which::which("clang++")
-                .or_else(|_| which::which("g++"))
-                .map_err(|_| AppError::CompilerNotFound {
-                    detail: "找不到 clang++ 或 g++，请安装 Xcode Command Line Tools: xcode-select --install".into(),
-                })?,
+            _ => detect_compiler()?,
         };
 
         // 构建编译参数（含黑名单校验）
@@ -43,6 +39,57 @@ impl CompilerConfig {
             test_time_limit_ms: settings.test.test_time_limit_ms,
         })
     }
+}
+
+/// 自动探测编译器路径（平台分支）
+fn detect_compiler() -> Result<PathBuf, AppError> {
+    #[cfg(unix)]
+    {
+        which::which("clang++")
+            .or_else(|_| which::which("g++"))
+            .map_err(|_| AppError::CompilerNotFound {
+                detail: "找不到 clang++ 或 g++，请安装 Xcode Command Line Tools: xcode-select --install".into(),
+            })
+    }
+    #[cfg(windows)]
+    {
+        // 1. 优先用打包的 TDM-GCC（resource_dir/mingw64/bin/g++.exe）
+        if let Some(bundled) = find_bundled_mingw() {
+            return Ok(bundled);
+        }
+        // 2. 回退到 PATH 中的 g++.exe / clang++.exe
+        which::which("g++.exe")
+            .or_else(|_| which::which("clang++.exe"))
+            .map_err(|_| AppError::CompilerNotFound {
+                detail: "找不到 g++ 或 clang++，请安装 TDM-GCC 或 MinGW-w64".into(),
+            })
+    }
+}
+
+/// 查找打包的 TDM-GCC（Windows 专用）
+///
+/// Tauri 在 Windows 上的 resource_dir 通常位于：
+/// - 开发模式：`target/debug/`
+/// - 安装版：`exe 同级目录/resources/`
+///
+/// 本函数尝试两个路径查找 `mingw64/bin/g++.exe`。
+#[cfg(windows)]
+fn find_bundled_mingw() -> Option<PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+
+    // 候选路径 1：exe_dir/resources/mingw64/bin/g++.exe（安装版）
+    let candidate1 = exe_dir.join("resources").join("mingw64").join("bin").join("g++.exe");
+    if candidate1.exists() {
+        return Some(candidate1);
+    }
+
+    // 候选路径 2：exe_dir/mingw64/bin/g++.exe（开发模式，资源在 target/debug/）
+    let candidate2 = exe_dir.join("mingw64").join("bin").join("g++.exe");
+    if candidate2.exists() {
+        return Some(candidate2);
+    }
+
+    None
 }
 
 #[cfg(test)]

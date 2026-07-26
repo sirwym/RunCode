@@ -4,13 +4,13 @@
 
 ## 项目概览
 
-RunCode 是一个轻量级 macOS 原生 C++ 教学编辑器，基于 Tauri 2 + React 19 + Monaco Editor，专为 OI / 算法教学场景设计。支持多样例测试、时间限制判定、实时终端、代码格式化等教学核心功能。
+RunCode 是一个轻量级跨平台 C++ 教学编辑器（macOS + Windows），基于 Tauri 2 + React 19 + Monaco Editor，专为 OI / 算法教学场景设计。支持多样例测试、时间限制判定、实时终端、代码格式化等教学核心功能。
 
 ## 技术栈
 
 **前端**：React 19 + TypeScript 5.8 + Vite 7 + Tailwind 4 + Zustand 4 + lucide-react 1.26 + Monaco Editor 0.52 + react-resizable-panels 2.1 + Radix UI + xterm 6
 
-**后端**：Rust 2021 edition + Tauri 2 + tokio + portable-pty + tree-sitter + serde + zip + walkdir
+**后端**：Rust 2021 edition + Tauri 2 + tokio + portable-pty + tree-sitter + serde + zip + walkdir + windows crate（Windows 平台 JobObject API，cfg(windows) 条件依赖）
 
 **测试**：Vitest 4.1（前端）+ cargo test（后端）
 
@@ -18,11 +18,16 @@ RunCode 是一个轻量级 macOS 原生 C++ 教学编辑器，基于 Tauri 2 + R
 - `src/` — 前端 React 代码
 - `src-tauri/src/` — Rust 后端代码
 - `src-tauri/src/commands/` — Tauri commands（前端 invoke 调用入口）
-- `src-tauri/src/runner/` — 进程执行与资源限制
+- `src-tauri/src/runner/` — 进程执行与资源限制（跨平台分发）
+- `src-tauri/src/runner/unix.rs` — Unix 平台执行实现（process_group + setrlimit）
+- `src-tauri/src/runner/windows.rs` — Windows 平台执行实现（JobObject + CPU 时间限制）
 - `src-tauri/src/parser/` — tree-sitter 代码解析
+- `src-tauri/resources/mingw64/` — Windows 内置 TDM-GCC（构建时自动下载，不提交）
 - `src/components/` — React 组件
 - `src/hooks/` — Zustand store hooks
 - `src/locales/` — i18n 文案（zh / en）
+- `scripts/prepare-tdm-gcc.ps1` / `.sh` — TDM-GCC 下载精简脚本
+- `scripts/build-windows.ps1` — Windows 一键构建脚本
 
 ## 硬约束（不可违反）
 
@@ -85,7 +90,7 @@ cd src-tauri && cargo test   # 后端 Rust 测试
 - `src-tauri/gen/` — 自动生成的 schema，不要手动修改
 - `Cargo.lock` / `pnpm-lock.yaml` — 除非用户明确要求
 - `.trae/` 目录 — TRAE 配置
-- `LICENSES/` — 字体许可证
+- `LICENSES/` — 字体与编译器许可证（JetBrains Mono / TDM-GCC）
 - `src-tauri/icons/` — 应用图标资源
 
 ## 关键决策（详见 ADR）
@@ -127,7 +132,7 @@ cd src-tauri && cargo test   # 后端 Rust 测试
 仓库内文档中的引用必须用**相对路径**，确保 GitHub 上可跳转：
 
 - 从 `docs/adr/` 引用根目录文件：`[Cargo.toml](../../src-tauri/Cargo.toml)`
-- 从根目录 `README.md` 引用：`[SIGNING.md](./SIGNING.md)`
+- 从根目录 `README.md` 引用：`[BUILD.md](./BUILD.md)`
 - **禁止**在仓库 markdown 中使用 `file:///Users/...` 绝对路径
 
 ### 现有 file:/// 绝对路径

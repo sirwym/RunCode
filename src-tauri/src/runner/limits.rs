@@ -2,20 +2,32 @@ use crate::settings::{RuntimeSettings, TestSettings};
 
 /// 资源限制集合
 ///
-/// macOS 上的限制说明：
+/// 平台限制说明：
+///
+/// **Unix（macOS/Linux）**：
 /// - RLIMIT_CPU：有效，限制 CPU 时间，限制失控代码消耗过多 CPU
 /// - RLIMIT_FSIZE：有效，限制文件大小，限制失控代码写爆磁盘
 /// - RLIMIT_NPROC：限制的是"用户总进程数"，无法用来限制单次运行 fork。
 ///   实测当前用户已有数百进程，设为 1/5/10 会导致所有 fork 失败。
 /// - RLIMIT_DATA/AS/RSS：只接受 RLIM_INFINITY，无法限制内存。
 ///
+/// **Windows**：
+/// - JobObject LIMIT_JOB_TIME：有效，限制 CPU 时间（等价 RLIMIT_CPU）
+/// - fsize 限制：**不实现**（Windows 无 RLIMIT_FSIZE 等价 API）
+/// - 内存限制：**不实现**（与 macOS 一致，不限制内存）
+/// - 内存采集：用 GetProcessMemoryInfo 轮询 PeakWorkingSetSize
+///
 /// 不做沙箱（用户决策）：这些限制用于防止"失控代码"（死循环、爆输出），
 /// 不用于隔离恶意代码。软件运行在用户电脑，用户对自己操作负责。
 #[derive(Clone, Copy, Debug)]
 pub struct ResourceLimits {
-    /// RLIMIT_CPU：CPU 时间上限（秒），限制死循环
+    /// CPU 时间上限（秒）
+    /// - Unix: RLIMIT_CPU
+    /// - Windows: JobObject LIMIT_JOB_TIME
     pub cpu_secs: u64,
-    /// RLIMIT_FSIZE：可创建文件大小上限（MB），限制写爆磁盘
+    /// 可创建文件大小上限（MB）
+    /// - Unix: RLIMIT_FSIZE（有效）
+    /// - Windows: 不实现（API 不支持，字段被忽略）
     pub fsize_mb: u64,
 }
 

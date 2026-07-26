@@ -1,20 +1,22 @@
 # RunCode
 
-> 轻量级 macOS 原生 C++ 教学编辑器，专为 OI / 算法教学场景设计
+> 轻量级跨平台 C++ 教学编辑器（macOS + Windows），专为 OI / 算法教学场景设计
 
 ![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)
+![Windows](https://img.shields.io/badge/Windows-10%2B-0078D6?logo=windows&logoColor=white)
 ![Tauri](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-2021-DEA584?logo=rust&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
+![Build](https://img.shields.io/github/actions/workflow/status/sirwym/RunCode/build.yml?label=Build&logo=github)
 
 ## 特性
 
-- **原生 macOS 体验** — Tauri 2 + Rust，无 Electron 包袱，体积小启动快
+- **原生桌面体验** — macOS + Windows 双平台，Tauri 2 + Rust，无 Electron 包袱，体积小启动快
 - **Monaco 编辑器** — VS Code 同款，教学友好的语法高亮 / 括号补全
 - **多样例测试** — 一次性运行多组样例，支持 stdin / expected 文件导入
 - **时间限制判定** — 单例超时判失败（OI 友好，默认 1000ms，可配置）
-- **实时终端** — PTY 终端支持交互式输入
+- **实时终端** — PTY 终端支持交互式输入（macOS forkpty / Windows ConPTY）
 - **代码格式化** — tree-sitter 解析 + 内置 formatter
 - **Lyra 全直角风格** — 中性灰配色，UI 与代码统一 JetBrains Mono
 - **中英文界面切换** — 编辑器界面支持中 / 英双语
@@ -35,9 +37,20 @@ pnpm install
 pnpm tauri dev
 ```
 
-要求：macOS 11+、Node.js 20.19+ 或 22.12+、pnpm、Rust toolchain（rustup）、Xcode Command Line Tools。
+**平台要求**：
+
+- macOS 11+（aarch64 / x86_64）
+- Windows 10 1903+（x86_64）
+- Node.js 20.19+ 或 22.12+、pnpm、Rust toolchain（rustup）
+
+**编译器**：
+
+- macOS：自动探测 clang++（Xcode Command Line Tools）
+- Windows：内置 TDM-GCC 10.3.0（无需另装）
 
 ## 构建
+
+### macOS
 
 ```bash
 # Ad-hoc 签名（开发用）
@@ -47,11 +60,18 @@ pnpm tauri dev
 ./scripts/build-signed.sh
 ```
 
-详见 [SIGNING.md](./SIGNING.md)。
+### Windows
+
+```powershell
+# NSIS 安装包（含内置 TDM-GCC）
+./scripts/build-windows.ps1
+```
+
+详见 [BUILD.md](./BUILD.md)。
 
 ## 文档
 
-- [macOS 签名与公证配置](./SIGNING.md)
+- [构建与签名指南（macOS + Windows）](./BUILD.md)
 - [AI 协作规范](./AGENTS.md)
 - [架构决策记录 (ADR)](./docs/adr/README.md)
 
@@ -62,13 +82,15 @@ RunCode 以当前用户权限执行本地 C++ 代码，**不是恶意代码沙�
 **资源限制范围**：
 
 - CPU 时间上限（防死循环）
-- 文件大小上限（防写爆磁盘）
+  - macOS：RLIMIT_CPU
+  - Windows：JobObject LIMIT_JOB_TIME
+- 文件大小上限（防写爆磁盘）— 仅 macOS（RLIMIT_FSIZE），Windows 无等价 API
 - 运行超时（硬杀进程）
 - 测试时间限制（软判定，OI 评测用）
 
 **不提供**：
 
-- 内存限制（macOS RLIMIT_DATA/AS/RSS 无法生效）
+- 内存限制（macOS RLIMIT_DATA/AS/RSS 无法生效，Windows 同样不实现）
 - 沙箱隔离（不隔离文件系统访问、网络、子进程）
 - 来源不明代码的安全审查
 
@@ -81,6 +103,13 @@ RunCode 以当前用户权限执行本地 C++ 代码，**不是恶意代码沙�
 - **JetBrains Mono**（UI 与代码统一字体）：SIL Open Font License 1.1，见 [LICENSES/JetBrainsMono-OFL.txt](./LICENSES/JetBrainsMono-OFL.txt)
 
 中文字形不打包，自动 fallback 到系统字体（PingFang SC / Hiragino Sans GB / Microsoft YaHei）。
+
+## 第三方组件
+
+- **TDM-GCC 10.3.0** (MinGW-w64 based) — GPLv3+，[源码](https://github.com/jmeubank/tdm-gcc-src)，[官方下载](https://jmeubank.github.io/tdm-gcc/)
+  - libstdc++ 受 GCC Runtime Library Exception 保护，用户编译的程序不感染 GPL
+  - 许可证文本：[LICENSES/TDM-GCC-GPLv3.txt](./LICENSES/TDM-GCC-GPLv3.txt) / [LICENSES/TDM-GCC-runtime.txt](./LICENSES/TDM-GCC-runtime.txt)
+- **JetBrains Mono** — SIL Open Font License 1.1
 
 ## 推荐开发环境
 

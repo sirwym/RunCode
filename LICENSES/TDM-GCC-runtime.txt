@@ -1,0 +1,31 @@
+MinGW-w64 Runtime Libraries License Summary
+=============================================
+
+The MinGW-w64 runtime libraries (mingw-w64 runtime, winpthreads, etc.)
+bundled with TDM-GCC are distributed under multiple permissive licenses.
+
+For the full text of each license, refer to the upstream MinGW-w64
+source repository: https://sourceforge.net/p/mingw-w64/mingw-w64/ci/master/tree/
+
+1. Zope Public License (ZPL) Version 2.1
+   - Covers most of the mingw-w64 runtime headers and libraries
+   - https://opensource.org/licenses/ZPL-2.1
+
+2. BSD 3-Clause "New" or "Revised" License
+   - Covers portions of the runtime and winpthreads library
+   - https://opensource.org/licenses/BSD-3-Clause
+
+3. Public Domain
+   - Some compatibility code is explicitly placed in the public domain
+
+4. GNU General Public License (GPL) with GCC Runtime Library Exception
+   - Covers libgcc and libstdc++ (GCC runtime libraries)
+   - See TDM-GCC-GPLv3.txt for GPLv3 text
+   - The GCC Runtime Library Exception allows user-compiled programs
+     to be distributed without GPL contamination
+
+These licenses permit commercial use, modification, distribution, and
+private use, and do not contaminate user-compiled C++ programs.
+
+For the exact licensing of any specific file, refer to the copyright
+notices within the MinGW-w64 source tree.

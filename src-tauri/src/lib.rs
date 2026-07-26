@@ -65,30 +65,43 @@ pub fn run() {
         ])
         .setup(|app| {
             // 应用菜单（RunCode）
-            let app_menu = Submenu::with_items(
+            // macOS 专属菜单项（hide/hide_others/show_all）用 cfg 包裹
+            let about = PredefinedMenuItem::about(
                 app,
-                "RunCode",
-                true,
-                &[
-                    &PredefinedMenuItem::about(
-                        app,
-                        Some("关于 RunCode"),
-                        Some(AboutMetadata {
-                            version: Some("0.1.0".into()),
-                            authors: Some(vec!["YuanMing".into()]),
-                            ..Default::default()
-                        }),
-                    )?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &MenuItem::with_id(app, "settings", "设置…", true, Some("CmdOrCtrl+,"))?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::hide(app, None)?,
-                    &PredefinedMenuItem::hide_others(app, None)?,
-                    &PredefinedMenuItem::show_all(app, None)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::quit(app, None)?,
-                ],
+                Some("关于 RunCode"),
+                Some(AboutMetadata {
+                    version: Some("0.1.0".into()),
+                    authors: Some(vec!["YuanMing".into()]),
+                    ..Default::default()
+                }),
             )?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
+            let settings_item = MenuItem::with_id(app, "settings", "设置…", true, Some("CmdOrCtrl+,"))?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+
+            #[cfg(target_os = "macos")]
+            let macos_only_items = (
+                PredefinedMenuItem::hide(app, None)?,
+                PredefinedMenuItem::hide_others(app, None)?,
+                PredefinedMenuItem::show_all(app, None)?,
+                PredefinedMenuItem::separator(app)?,
+            );
+            #[cfg(target_os = "macos")]
+            let quit_item = PredefinedMenuItem::quit(app, None)?;
+
+            #[cfg(target_os = "macos")]
+            let app_menu_items: [&dyn tauri::menu::IsMenuItem<tauri::Wry>; 9] = [
+                &about, &sep1, &settings_item, &sep2,
+                &macos_only_items.0, &macos_only_items.1, &macos_only_items.2, &macos_only_items.3,
+                &quit_item,
+            ];
+            #[cfg(not(target_os = "macos"))]
+            let quit_item = PredefinedMenuItem::quit(app, None)?;
+            #[cfg(not(target_os = "macos"))]
+            let app_menu_items: [&dyn tauri::menu::IsMenuItem<tauri::Wry>; 5] = [
+                &about, &sep1, &settings_item, &sep2, &quit_item,
+            ];
+            let app_menu = Submenu::with_items(app, "RunCode", true, &app_menu_items)?;
 
             // 文件菜单
             let file_menu = Submenu::with_items(
