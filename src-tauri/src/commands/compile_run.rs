@@ -34,7 +34,7 @@ pub struct RunResult {
     pub truncated: bool,
     pub stage: RunStage,
     /// 运行阶段内存峰值（KB）。编译失败时为 0
-    pub max_rus_kb: u64,
+    pub max_rss_kb: u64,
 }
 
 /// 编译结果（供 compile_and_run 和 PTY 复用）
@@ -167,7 +167,7 @@ async fn run_compile_and_run_inner(
                 killed_by: None,
                 truncated: false,
                 stage: RunStage::CompileFailed,
-                max_rus_kb: 0,
+                max_rss_kb: 0,
             });
         }
     };
@@ -194,7 +194,7 @@ async fn run_compile_and_run_inner(
         killed_by: run_out.killed_by,
         truncated: run_out.truncated,
         stage: RunStage::Ran,
-        max_rus_kb: run_out.max_rus_kb,
+        max_rss_kb: run_out.max_rss_kb,
     })
 }
 
@@ -225,7 +225,8 @@ int main() {
             .expect("应编译运行成功");
         assert_eq!(result.stage, RunStage::Ran);
         assert!(result.success);
-        assert_eq!(result.stdout, "hi\n");
+        // Windows 上 C++ cout 输出 \r\n（C runtime 文本模式），去掉 \r 后比较
+        assert_eq!(result.stdout.replace('\r', ""), "hi\n");
     }
 
     #[tokio::test]
@@ -243,7 +244,7 @@ int main() {
         let result = run_compile_and_run_inner(code.into(), Some("21".into()), "test".into(), None, &config, limits)
             .await
             .expect("应编译运行成功");
-        assert_eq!(result.stdout, "42\n");
+        assert_eq!(result.stdout.replace('\r', ""), "42\n");
     }
 
     #[tokio::test]

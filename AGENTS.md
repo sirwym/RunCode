@@ -22,11 +22,11 @@ RunCode 是一个轻量级跨平台 C++ 教学编辑器（macOS + Windows），�
 - `src-tauri/src/runner/unix.rs` — Unix 平台执行实现（process_group + setrlimit）
 - `src-tauri/src/runner/windows.rs` — Windows 平台执行实现（JobObject + CPU 时间限制）
 - `src-tauri/src/parser/` — tree-sitter 代码解析
-- `src-tauri/resources/tdm-gcc/` — Windows 内置 TDM-GCC（构建时自动下载，不提交）
+- `src-tauri/resources/tdm-gcc/` — Windows 内置 TDM-GCC（已提交到仓库，clone 后即用）
 - `src/components/` — React 组件
 - `src/hooks/` — Zustand store hooks
 - `src/locales/` — i18n 文案（zh / en）
-- `scripts/prepare-tdm-gcc.ps1` / `.sh` — TDM-GCC 下载精简脚本
+- `scripts/prepare-tdm-gcc.ps1` — TDM-GCC 升级工具（仅版本升级时使用，日常构建不需要）
 - `scripts/build-windows.ps1` — Windows 一键构建脚本
 
 ## 硬约束（不可违反）

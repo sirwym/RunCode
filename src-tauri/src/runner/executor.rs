@@ -45,7 +45,7 @@ pub struct RunOutput {
     /// - Linux: ru_maxrss 已是 KB
     /// - Windows: GetProcessMemoryInfo 的 PeakWorkingSetSize，轮询采集
     /// 超时/取消分支未完成 wait，记为 0
-    pub max_rus_kb: u64,
+    pub max_rss_kb: u64,
 }
 
 /// 带资源限制、超时与取消的执行核心（平台分发）。

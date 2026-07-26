@@ -138,22 +138,23 @@ xcrun notarytool log <submission-id> --apple-id "$APPLE_ID" --password "$APPLE_P
 ```
 
 脚本会自动：
-1. 准备 TDM-GCC（若 `src-tauri/resources/tdm-gcc/bin/g++.exe` 不存在则下载精简）
-2. 构建前端（`pnpm build`）
-3. 构建 Tauri NSIS 安装包（`pnpm tauri build`）
-4. 输出产物路径和体积
+1. 构建前端（`pnpm build`）
+2. 构建 Tauri NSIS 安装包（`pnpm tauri build`）
+3. 输出产物路径和体积
+
+TDM-GCC 已内置并提交到仓库（`src-tauri/resources/tdm-gcc/`），clone 后即用，无需额外准备。
 
 产出：`src-tauri/target/release/bundle/nsis/RunCode_0.1.0_x64-setup.exe`
 
-预估体积：~50 MB（RunCode 10MB + TDM-GCC 精简后 ~40MB）
+预估体积：~290 MB（RunCode ~10MB + TDM-GCC ~280MB）
 
 ### TDM-GCC 维护
 
 - **当前版本**：TDM-GCC 10.3.0-2 (tdm64)
 - **下载源**：https://github.com/jmeubank/tdm-gcc/releases
 - **官方网站**：https://jmeubank.github.io/tdm-gcc/
-- **升级流程**：修改 `scripts/prepare-tdm-gcc.ps1` 中的 `TDM_URL` 和 `TDM_VERSION`，重新执行构建脚本
-- **精简策略**：删 GDB（~15MB）、删 mingw32-make（~2MB）、删文档/locale/man
+- **升级流程**：修改 `scripts/prepare-tdm-gcc.ps1` 中的 `$tdmUrl` 和 `$tdmVersion`，执行该脚本重新生成 `src-tauri/resources/tdm-gcc/`，然后将更新后的目录提交到仓库
+- **精简策略**：删 GDB、mingw32-make、Fortran、LTO、32 位库、文档/locale/man（精简后仍约 280MB，主要体积来自 mingw-w64 runtime 头文件与 libstdc++）
 
 许可证：
 - **GCC/binutils**：GPLv3+，见 [LICENSES/TDM-GCC-GPLv3.txt](./LICENSES/TDM-GCC-GPLv3.txt)

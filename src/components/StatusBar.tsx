@@ -70,10 +70,10 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
         </span>
       )}
 
-      {runResult && runResult.max_rus_kb > 0 && (
+      {runResult && runResult.max_rss_kb > 0 && (
         <span className="status-item">
           <span className="status-label">{t("status.memory")}:</span>
-          {formatMem(runResult.max_rus_kb)}
+          {formatMem(runResult.max_rss_kb)}
         </span>
       )}
 

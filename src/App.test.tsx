@@ -144,6 +144,7 @@ function resetStores(settings: AppSettings) {
     testProgress: null,
     ptyRunId: null,
     ptyExitInfo: null,
+    compileError: null,
     compileRun: vi.fn(),
     runTests: vi.fn(),
     startInteractive: vi.fn(),

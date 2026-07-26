@@ -28,6 +28,7 @@ import {
   type EffectiveTheme,
   type SettingsTheme,
 } from "./utils/theme";
+import { parseGccErrors } from "./utils/compileErrors";
 
 type PanelTab = "tests" | "terminal";
 
@@ -68,6 +69,7 @@ function App() {
   const runTests = useRunManager((s) => s.runTests);
   const onPtyExit = useRunManager((s) => s.onPtyExit);
   const ptyRunId = useRunManager((s) => s.ptyRunId);
+  const compileError = useRunManager((s) => s.compileError);
   const strict = useTestOptions((s) => s.strict);
 
   // 读取设置（用于 StatusBar / Editor / Terminal 等）
@@ -384,11 +386,23 @@ function App() {
   }, [activeTab, suiteId, runTests, strict, autoHide]);
 
   const handlePtyExit = useCallback(
-    (exitCode: number | null, killedBy: string | null, _compileStderr: string | null) => {
+    (exitCode: number | null, killedBy: string | null) => {
       onPtyExit({ exitCode, killedBy });
     },
     [onPtyExit],
   );
+
+  // 编译错误变化时：解析 stderr → Editor 高亮 + 跳转；清空时移除高亮
+  useEffect(() => {
+    if (compileError) {
+      const errors = parseGccErrors(compileError);
+      if (errors.length > 0) {
+        editorRef.current?.setCompileErrors(errors);
+      }
+    } else {
+      editorRef.current?.clearCompileErrors();
+    }
+  }, [compileError]);
 
   const handleCloseTab = useCallback(
     (id: string) => {
@@ -422,7 +436,13 @@ function App() {
         <Panel defaultSize={50} minSize={20} className="editor-container">
           <EditorPane
             ref={editorRef}
-            onContentChange={(tabId, content) => setContent(tabId, content)}
+            onContentChange={(tabId, content) => {
+              setContent(tabId, content);
+              // 用户编辑代码时清除编译错误高亮
+              if (useRunManager.getState().compileError) {
+                useRunManager.setState({ compileError: null });
+              }
+            }}
             onRun={handleRun}
             onCursorPositionChange={handleCursorPositionChange}
             settings={settings?.editor}
@@ -482,6 +502,7 @@ function App() {
                 onExit={handlePtyExit}
                 fontSize={settings?.editor.terminal_font_size}
                 theme={effectiveTheme}
+                compileError={compileError}
               />
             )}
           </div>

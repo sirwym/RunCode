@@ -7,7 +7,7 @@ import {
 } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor as MonacoEditorNS } from "monaco-editor";
-import type { EditorSettings } from "../types";
+import type { EditorSettings, CompileError } from "../types";
 import { useTabs } from "../hooks/useTabs";
 
 // 暴露给父组件的命令接口
@@ -18,6 +18,8 @@ export interface EditorHandle {
   focus: () => void;
   switchModel: (tabId: string, content: string, language: string) => void;
   disposeModel: (tabId: string) => void;
+  setCompileErrors: (errors: CompileError[]) => void;
+  clearCompileErrors: () => void;
 }
 
 interface EditorPaneProps {
@@ -39,6 +41,8 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const modelsRef = useRef<Map<string, MonacoEditorNS.ITextModel>>(new Map());
   const activeTabIdRef = useRef<string | null>(null);
+  // 编译错误装饰 ID（deltaDecorations 增量更新）
+  const decorationsRef = useRef<string[]>([]);
   // 用 ref 持有最新 onContentChange，避免 model.onDidChangeContent 闭包陈旧
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
@@ -91,6 +95,29 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
           model.dispose();
           modelsRef.current.delete(tabId);
         }
+      },
+      setCompileErrors: (errors) => {
+        const editor = editorRef.current;
+        const monaco = monacoRef.current;
+        if (!editor || !monaco || errors.length === 0) return;
+
+        const decorations: MonacoEditorNS.IModelDeltaDecoration[] = errors.map((e) => ({
+          range: new monaco.Range(e.line, 1, e.line, 1),
+          options: {
+            isWholeLine: true,
+            className: "compile-error-line",
+            hoverMessage: { value: `**${e.message}**` },
+          },
+        }));
+
+        decorationsRef.current = editor.deltaDecorations(decorationsRef.current, decorations);
+        // 跳转到第一个错误行
+        editor.revealLineInCenter(errors[0].line);
+      },
+      clearCompileErrors: () => {
+        const editor = editorRef.current;
+        if (!editor) return;
+        decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
       },
     }),
     []
@@ -170,6 +197,9 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
       folding: true,
       overviewRulerBorder: false,
       hideCursorInOverviewRuler: true,
+      // 禁用等宽字体优化：JetBrains Mono Variable 是可变字体，
+      // Monaco 缓存的字符宽度与实际渲染不一致会导致光标错位（Windows 已知问题）
+      disableMonospaceOptimizations: true,
     });
   }, [settings]);
 
@@ -211,6 +241,8 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
         folding: true,
         overviewRulerBorder: false,
         hideCursorInOverviewRuler: true,
+        // 禁用等宽字体优化：可变字体度量不一致会导致光标错位
+        disableMonospaceOptimizations: true,
       }}
     />
   );

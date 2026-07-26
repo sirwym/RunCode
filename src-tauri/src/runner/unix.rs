@@ -160,11 +160,11 @@ pub async fn run_with_limits(
 
     // 三路竞速：子进程结束 / 墙钟超时 / 外部取消
     let mut killed_by: Option<KillReason> = None;
-    let mut max_rus_kb: u64 = 0;
+    let mut max_rss_kb: u64 = 0;
     let exit_status_result = if let Some(mut cancel_rx) = cancel_rx {
         tokio::select! {
             (status, rss) = wait_with_rusage(&mut child) => {
-                max_rus_kb = rss;
+                max_rss_kb = rss;
                 Some(status)
             }
             _ = tokio::time::sleep(timeout) => {
@@ -184,7 +184,7 @@ pub async fn run_with_limits(
         // 无取消信号（单元测试路径）
         tokio::select! {
             (status, rss) = wait_with_rusage(&mut child) => {
-                max_rus_kb = rss;
+                max_rss_kb = rss;
                 Some(status)
             }
             _ = tokio::time::sleep(timeout) => {
@@ -232,7 +232,7 @@ pub async fn run_with_limits(
         duration_ms: start.elapsed().as_millis() as u64,
         killed_by,
         truncated: stdout_trunc || stderr_trunc,
-        max_rus_kb,
+        max_rss_kb,
     })
 }
 
@@ -274,7 +274,7 @@ mod tests {
     async fn captures_max_rss() {
         // 验证 run_with_limits 能正常完成并填充 RunOutput。
         //
-        // 注：不断言 max_rus_kb > 0。RUSAGE_CHILDREN.ru_maxrss 是所有已回收子进程 RSS 的
+        // 注：不断言 max_rss_kb > 0。RUSAGE_CHILDREN.ru_maxrss 是所有已回收子进程 RSS 的
         // 最大值（max），wait_with_rusage 用 after - baseline 求差值，只有当本子进程 RSS
         // 大于之前所有子进程时才 > 0。并行测试下此差值不可靠，属 Unix API 固有限制。
         // Windows 实现用 GetProcessMemoryInfo 轮询，不依赖此机制。

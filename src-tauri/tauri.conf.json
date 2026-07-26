@@ -47,9 +47,6 @@
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"]
       }
-    },
-    "resources": {
-      "resources/tdm-gcc/**/*": "tdm-gcc/"
     }
   }
 }

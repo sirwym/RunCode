@@ -289,8 +289,10 @@ pub fn validate_extra_args(args: &str) -> Result<Vec<String>, AppError> {
             continue;
         }
 
-        // 拒绝绝对路径
-        if p.starts_with('/') {
+        // 拒绝绝对路径（跨平台：Unix /foo、Windows C:\foo 等）
+        // 注意：Windows 上 Path::is_absolute() 不认 /foo（需盘符），
+        // 补充 starts_with('/') 拦截 Unix 风格绝对路径
+        if Path::new(&p).is_absolute() || p.starts_with('/') {
             return Err(AppError::Other {
                 detail: format!("附加参数包含绝对路径，已拒绝: {p}"),
             });
@@ -398,8 +400,8 @@ pub fn build_compile_args(settings: &CompilerSettings) -> Result<Vec<String>, Ap
         }
     }
 
-    // 无颜色诊断（教学场景固定）
-    args.push("-fno-color-diagnostics".into());
+    // 无颜色诊断（教学场景固定，GCC 与 clang 均兼容）
+    args.push("-fno-diagnostics-color".into());
 
     // 附加参数（黑名单校验）
     let extra = validate_extra_args(&settings.extra_args)?;
@@ -694,7 +696,7 @@ mod tests {
         assert!(args.contains(&"-O0".to_string()));
         assert!(args.contains(&"-Wall".to_string()));
         assert!(args.contains(&"-Wextra".to_string()));
-        assert!(args.contains(&"-fno-color-diagnostics".to_string()));
+        assert!(args.contains(&"-fno-diagnostics-color".to_string()));
     }
 
     #[test]

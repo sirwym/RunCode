@@ -1,12 +1,14 @@
 /* 字体打包：仅 Latin 子集，减小体积
    - JetBrains Mono（UI + 代码统一字体）：SIL OFL 1.1
-   中文字形不打包，自动 fallback 到系统字体（PingFang SC 等） */
+   中文字形不打包，自动 fallback 到系统字体（PingFang SC 等）
+   font-display: block —— 等待字体加载完成后再渲染文字，
+   避免 swap 模式下字体切换导致字符宽度变化、Monaco 光标对不准 */
 
 /* JetBrains Mono Variable - Latin 子集 */
 @font-face {
   font-family: "JetBrains Mono Variable";
   font-style: normal;
-  font-display: swap;
+  font-display: block;
   font-weight: 100 800;
   src: url(@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2)
     format("woff2-variations");
@@ -18,7 +20,7 @@
 @font-face {
   font-family: "JetBrains Mono Variable";
   font-style: normal;
-  font-display: swap;
+  font-display: block;
   font-weight: 100 800;
   src: url(@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-ext-wght-normal.woff2)
     format("woff2-variations");

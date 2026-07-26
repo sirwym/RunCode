@@ -12,6 +12,18 @@ export interface AppErrorPayload {
 
 export type RunStage = "compile_failed" | "ran";
 
+// 与 Rust 端 pty_run.rs StartPtyResult 对应（tag = "status"）
+export type StartPtyResult =
+  | { status: "success"; run_id: string }
+  | { status: "compile_failed"; run_id: string; stderr: string };
+
+// g++ 编译错误解析结果（parseGccErrors 产出）
+export interface CompileError {
+  line: number;
+  column: number;
+  message: string;
+}
+
 export interface RunResult {
   run_id: string;
   success: boolean;
@@ -23,7 +35,7 @@ export interface RunResult {
   truncated: boolean;
   stage: RunStage;
   /** 运行阶段内存峰值（KB）。编译失败时为 0 */
-  max_rus_kb: number;
+  max_rss_kb: number;
 }
 
 // ============ 文件型测试套件 ============
@@ -72,7 +84,7 @@ export interface TestCaseResult {
   truncated: boolean;
   first_diff: number | null;
   /** 内存峰值（KB） */
-  max_rus_kb: number;
+  max_rss_kb: number;
 }
 
 // 与 Rust 端 commands/test_runner.rs 的 TestRunResult 对应

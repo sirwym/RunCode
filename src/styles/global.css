@@ -22,6 +22,10 @@
   /* 终端背景（与 xterm 深色主题一致） */
   --bg-terminal: #0a0a0a;
 
+  /* 编译错误行高亮（半透明红底 + 左侧红边） */
+  --compile-error-bg: rgba(239, 68, 68, 0.12);
+  --compile-error-border: #ef4444;
+
   /* 间距 */
   --space-xs: 4px;
   --space-sm: 8px;
@@ -62,6 +66,9 @@
   --warning: #ca8a04;
   /* 终端背景（与 xterm 浅色主题一致） */
   --bg-terminal: #ffffff;
+  /* 编译错误行高亮（浅色主题用更深的红） */
+  --compile-error-bg: rgba(220, 38, 38, 0.10);
+  --compile-error-border: #dc2626;
 }
 
 /* system 主题：跟随系统偏好 */
@@ -80,6 +87,8 @@
     --warning: #ca8a04;
     /* 终端背景（与 xterm 浅色主题一致） */
     --bg-terminal: #ffffff;
+    --compile-error-bg: rgba(220, 38, 38, 0.10);
+    --compile-error-border: #dc2626;
   }
 }
 
@@ -604,6 +613,12 @@ body {
 
 .terminal-container .xterm-viewport {
   background-color: transparent !important;
+}
+
+/* ============== 编译错误行高亮 ============== */
+.compile-error-line {
+  background: var(--compile-error-bg, rgba(239, 68, 68, 0.12));
+  border-left: 2px solid var(--compile-error-border, #ef4444);
 }
 
 /* ============== 小号按钮 ============== */

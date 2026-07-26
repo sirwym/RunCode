@@ -2,10 +2,11 @@
 # RunCode Windows 一键构建脚本
 #
 # 流程：
-#   1. 准备 TDM-GCC（若 resources/tdm-gcc/ 不存在则下载精简）
-#   2. 构建前端（pnpm build）
-#   3. 构建 Tauri NSIS 安装包（pnpm tauri build）
-#   4. 输出产物路径和体积
+#   1. 构建前端（pnpm build）
+#   2. 构建 Tauri NSIS 安装包（pnpm tauri build）
+#   3. 输出产物路径和体积
+#
+# TDM-GCC 已内置并提交到仓库（src-tauri/resources/tdm-gcc/），clone 后即用，无需额外准备。
 #
 # 用法：在 Windows 上执行 `./scripts/build-windows.ps1`
 # 产出：src-tauri/target/release/bundle/nsis/RunCode_0.1.0_x64-setup.exe
@@ -18,25 +19,16 @@ cd "$(split-path $myinvocation.mycommand.path -parent)/.."
 
 write-host "=== RunCode Windows 构建脚本 ===" -foregroundcolor cyan
 write-host ""
+write-host "✓ TDM-GCC 已就绪: src-tauri/resources/tdm-gcc/bin/g++.exe" -foregroundcolor green
+write-host ""
 
-# 1. 准备 TDM-GCC（若 resources/tdm-gcc/bin/g++.exe 不存在则下载）
-$gppPath = "src-tauri/resources/tdm-gcc/bin/g++.exe"
-if (-not (test-path $gppPath)) {
-    write-host "=== 准备 TDM-GCC ===" -foregroundcolor yellow
-    ./scripts/prepare-tdm-gcc.ps1
-    write-host ""
-} else {
-    write-host "✓ TDM-GCC 已就绪: $gppPath（跳过准备）" -foregroundcolor green
-    write-host ""
-}
-
-# 2. 构建前端
+# 1. 构建前端
 write-host "=== 构建前端 ===" -foregroundcolor yellow
 pnpm build
 write-host "✓ 前端构建完成"
 write-host ""
 
-# 3. 构建 Tauri（NSIS 安装包）
+# 2. 构建 Tauri（NSIS 安装包）
 write-host "=== 构建 Tauri (NSIS) ===" -foregroundcolor yellow
 pnpm tauri build
 write-host ""

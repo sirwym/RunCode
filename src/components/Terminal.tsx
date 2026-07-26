@@ -58,9 +58,12 @@ const XTERM_LIGHT_THEME: XTermTheme = {
 
 interface TerminalProps {
   runId: string | null; // PTY 会话 ID
-  onExit: (exitCode: number | null, killedBy: string | null, compileStderr: string | null) => void;
+  onExit: (exitCode: number | null, killedBy: string | null) => void;
   fontSize?: number;
   theme?: "dark" | "light";
+  // 编译失败时的 stderr（PTY 交互模式下编译失败不创建 PTY 会话，
+  // 由父组件传入 stderr 直接显示）
+  compileError?: string | null;
 }
 
 // xterm.js 终端组件。
@@ -68,7 +71,7 @@ interface TerminalProps {
 // - 用户输入通过 onData → write_pty_stdin
 // - 容器大小变化通过 ResizeObserver → resize_pty
 // - fontSize 仅在初始化时读取，运行中改设置需重启应用生效
-function Terminal({ runId, onExit, fontSize, theme }: TerminalProps) {
+function Terminal({ runId, onExit, fontSize, theme, compileError }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -143,6 +146,15 @@ function Terminal({ runId, onExit, fontSize, theme }: TerminalProps) {
     term.options.theme = theme === "light" ? XTERM_LIGHT_THEME : XTERM_DARK_THEME;
   }, [theme]);
 
+  // compileError 变化时显示编译错误（PTY 交互模式下编译失败不创建 PTY 会话，
+  // 直接把 stderr 写入终端显示）
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || !compileError) return;
+    term.reset();
+    term.write(`\r\n\x1b[31m${compileError}\x1b[0m\r\n`);
+  }, [compileError]);
+
   // runId 变化时绑定/解绑事件 + onData
   useEffect(() => {
     const term = termRef.current;
@@ -169,18 +181,9 @@ function Terminal({ runId, onExit, fontSize, theme }: TerminalProps) {
         run_id: string;
         exit_code: number | null;
         killed_by: string | null;
-        compile_stderr: string | null;
       }>("pty_exit", (e) => {
         if (e.payload.run_id === runId) {
-          if (e.payload.compile_stderr) {
-            // 编译失败：在终端中显示错误
-            term.write(`\r\n\x1b[31m${e.payload.compile_stderr}\x1b[0m\r\n`);
-          }
-          onExitRef.current(
-            e.payload.exit_code,
-            e.payload.killed_by,
-            e.payload.compile_stderr,
-          );
+          onExitRef.current(e.payload.exit_code, e.payload.killed_by);
         }
       });
     };

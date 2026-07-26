@@ -43,7 +43,10 @@ pub async fn run_with_limits(
     // Windows 用 tokio::process::Command（内部用 CreateProcess）
     // process_group(0) 在 Windows 上是 no-op，需要用 creation_flags(0x00000200)
     // 即 CREATE_NEW_PROCESS_GROUP。tokio Command 在 Windows 上原生支持 creation_flags。
+    // CREATE_NO_WINDOW (0x08000000)：Tauri 是 GUI 子系统无控制台，spawn 控制台程序
+    // （g++ 等）时若不设此标志，Windows 会自动创建控制台窗口（"小黑框"）。
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     let mut command = Command::new(&cmd[0]);
     command
@@ -53,7 +56,7 @@ pub async fn run_with_limits(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 
     let mut child = command.spawn()?;
     let pid = child
@@ -151,19 +154,28 @@ pub async fn run_with_limits(
 
     // 通知内存轮询线程退出并收集结果
     exit_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-    let max_rus_kb = mem_rx.recv().unwrap_or(0);
+    let max_rss_kb = mem_rx.recv().unwrap_or(0);
 
     // 等输出读取任务结束
-    let (stdout_bytes, stdout_trunc) = stdout_task
-        .await
-        .map_err(|e| AppError::Other {
-            detail: format!("stdout 读取任务失败: {e}"),
-        })??;
-    let (stderr_bytes, stderr_trunc) = stderr_task
-        .await
-        .map_err(|e| AppError::Other {
-            detail: format!("stderr 读取任务失败: {e}"),
-        })??;
+    // 超时保护：进程被杀后其子进程可能仍持有管道句柄，导致 task 无法读到 EOF
+    let (stdout_bytes, stdout_trunc) = match tokio::time::timeout(
+        Duration::from_millis(500),
+        stdout_task,
+    )
+    .await
+    {
+        Ok(Ok(r)) => r?,
+        _ => (Vec::new(), false),
+    };
+    let (stderr_bytes, stderr_trunc) = match tokio::time::timeout(
+        Duration::from_millis(500),
+        stderr_task,
+    )
+    .await
+    {
+        Ok(Ok(r)) => r?,
+        _ => (Vec::new(), false),
+    };
 
     // 解析退出码
     let exit_code = match exit_status_result {
@@ -188,7 +200,7 @@ pub async fn run_with_limits(
         duration_ms: start.elapsed().as_millis() as u64,
         killed_by,
         truncated: stdout_trunc || stderr_trunc,
-        max_rus_kb,
+        max_rss_kb,
     })
 }
 
@@ -334,7 +346,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_kills_process() {
         let out = run_with_limits(
-            cmd_cmd("ping -n 30 127.0.0.1 > nul"),
+            cmd_cmd("ping -n 30 127.0.0.1 > nul 2>nul"),
             PathBuf::from(".").as_path(),
             None,
             Duration::from_millis(500),
@@ -361,7 +373,7 @@ mod tests {
         let (tx, rx) = oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
             run_with_limits(
-                cmd_cmd("ping -n 30 127.0.0.1 > nul"),
+                cmd_cmd("ping -n 30 127.0.0.1 > nul 2>nul"),
                 PathBuf::from(".").as_path(),
                 None,
                 Duration::from_secs(30),

@@ -24,7 +24,7 @@ pub struct TestCaseResult {
     /// 首次差异位置（标准化后字符串中的字符索引）；通过时为 None
     pub first_diff: Option<usize>,
     /// 内存峰值（KB）
-    pub max_rus_kb: u64,
+    pub max_rss_kb: u64,
 }
 
 /// 批量测试结果
@@ -324,7 +324,7 @@ async fn run_tests_inner(
             killed_by: run_out.killed_by,
             truncated: run_out.truncated,
             first_diff,
-            max_rus_kb: run_out.max_rus_kb,
+            max_rss_kb: run_out.max_rss_kb,
         });
     }
 

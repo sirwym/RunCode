@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# npm 生成的 lock 文件（本项目用 pnpm）
+package-lock.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -30,7 +33,5 @@ dist-ssr
 logo.png
 logo_processed.png
 
-# TDM-GCC 解压目录（构建时自动下载，不提交）
-# 仅保留 .gitkeep 占位，确保 macOS 构建时 tauri.conf.json 的 resources 配置有效
-src-tauri/resources/tdm-gcc/*
-!src-tauri/resources/tdm-gcc/.gitkeep
+# TDM-GCC 升级脚本临时产物（prepare-tdm-gcc.ps1 使用）
+build/

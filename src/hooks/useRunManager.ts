@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { RunKind, RunResult, TestRunResult, AppErrorPayload, TestProgress } from "../types";
+import type { RunKind, RunResult, TestRunResult, AppErrorPayload, TestProgress, StartPtyResult } from "../types";
 import { getT } from "./useI18n";
 
 // 运行状态：idle 空闲 / running 运行中 / done 成功结束 / error 出错
@@ -41,6 +41,10 @@ interface RunManagerState {
   ptyRunId: string | null;
   ptyExitInfo: PtyExitInfo | null;
 
+  // 编译失败时的 stderr（PTY 交互模式下，编译失败不创建 PTY 会话，
+  // 直接把 stderr 存这里供 Terminal 显示 + Editor 解析错误行）
+  compileError: string | null;
+
   // 操作
   compileRun: (code: string, stdin?: string) => Promise<void>;
   runTests: (code: string, suiteId: string, strict: boolean) => Promise<void>;
@@ -66,6 +70,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   testProgress: null,
   ptyRunId: null,
   ptyExitInfo: null,
+  compileError: null,
 
   compileRun: async (code, stdin) => {
     if (get().activeRunId) return;
@@ -142,10 +147,22 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       runResult: null,
       testResult: null,
       ptyExitInfo: null,
+      compileError: null,
     });
     try {
-      const runId = await invoke<string>("start_pty_run", { code });
-      set({ activeRunId: runId, ptyRunId: runId });
+      const result = await invoke<StartPtyResult>("start_pty_run", { code });
+      if (result.status === "success") {
+        set({ activeRunId: result.run_id, ptyRunId: result.run_id });
+      } else {
+        // 编译失败：后端返回 CompileFailed，不创建 PTY 会话
+        set({
+          activeRunId: null,
+          status: "error",
+          ptyRunId: null,
+          kind: null,
+          compileError: result.stderr,
+        });
+      }
     } catch (e) {
       set({
         activeRunId: null,
@@ -213,6 +230,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       ptyRunId: null,
       ptyExitInfo: null,
       testProgress: null,
+      compileError: null,
     });
   },
 }));

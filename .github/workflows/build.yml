@@ -59,20 +59,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Cache TDM-GCC
-        uses: actions/cache@v4
-        with:
-          path: src-tauri/resources/tdm-gcc
-          key: tdm-gcc-10.3.0-2-v1
-
-      - name: Prepare TDM-GCC
-        run: ./scripts/prepare-tdm-gcc.ps1
-        shell: pwsh
-
-      - name: Add TDM-GCC to PATH
-        run: echo "$PWD\src-tauri\resources\tdm-gcc\bin" >> $env:GITHUB_PATH
-        shell: pwsh
-
       - name: Frontend test (Vitest)
         run: pnpm test
 
