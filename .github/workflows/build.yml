@@ -29,7 +29,7 @@ jobs:
         run: pnpm test
 
       - name: Backend test (cargo test)
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 
       - name: Build DMG (ad-hoc signed)
         run: ./scripts/build-dev.sh
@@ -63,7 +63,7 @@ jobs:
         run: pnpm test
 
       - name: Backend test (cargo test)
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 
       - name: Cache TDM-GCC
         uses: actions/cache@v4
