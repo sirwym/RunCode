@@ -42,11 +42,8 @@ pub async fn run_with_limits(
 
     // Windows 用 tokio::process::Command（内部用 CreateProcess）
     // process_group(0) 在 Windows 上是 no-op，需要用 creation_flags(0x00000200)
-    // 即 CREATE_NEW_PROCESS_GROUP。但 tokio Command 在 Windows 上不直接支持 creation_flags，
-    // 这里用 std::os::windows::process::CommandExt 扩展。
-    use std::os::windows::process::CommandExt;
+    // 即 CREATE_NEW_PROCESS_GROUP。tokio Command 在 Windows 上原生支持 creation_flags。
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_SUSPENDED: u32 = 0x0000_0004;
 
     let mut command = Command::new(&cmd[0]);
     command
@@ -56,7 +53,7 @@ pub async fn run_with_limits(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
 
     let mut child = command.spawn()?;
     let pid = child
@@ -68,11 +65,8 @@ pub async fn run_with_limits(
     // 创建 JobObject 并设置 CPU 时间限制
     let h_job = create_job_with_limits(limits.cpu_secs)?;
 
-    // 把子进程加入 JobObject
-    assign_process_to_job(h_job, pid)?;
-
-    // 恢复子进程主线程
-    resume_process(pid)?;
+    // 把子进程加入 JobObject（Windows 8+ 允许把已启动的进程加入 JobObject）
+    assign_process_to_job(h_job.0, pid)?;
 
     // 写 stdin（独立任务，避免阻塞 select）
     if let Some(input) = stdin {
@@ -125,13 +119,13 @@ pub async fn run_with_limits(
                 Some(status)
             }
             _ = tokio::time::sleep(timeout) => {
-                terminate_job(h_job);
+                terminate_job(h_job.0);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Timeout);
                 None
             }
             _ = &mut cancel_rx => {
-                terminate_job(h_job);
+                terminate_job(h_job.0);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Cancelled);
                 None
@@ -144,7 +138,7 @@ pub async fn run_with_limits(
                 Some(status)
             }
             _ = tokio::time::sleep(timeout) => {
-                terminate_job(h_job);
+                terminate_job(h_job.0);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Timeout);
                 None
@@ -182,7 +176,7 @@ pub async fn run_with_limits(
     }
 
     // 关闭 JobObject 句柄（KILL_ON_JOB_CLOSE 会确保子进程已被杀）
-    close_handle(h_job);
+    close_handle(h_job.0);
 
     Ok(RunOutput {
         exit_code,
@@ -203,12 +197,17 @@ use windows::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_JOB_TIME, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
-use windows::Win32::System::Threading::{OpenThread, ResumeThread, PROCESS_INFORMATION};
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use windows::Win32::System::Threading::PROCESS_QUERY_INFORMATION;
 
+/// 包装 Windows HANDLE 使其实现 Send。
+/// HANDLE 是 *mut c_void 的别名，裸指针不实现 Send，无法跨 await 点持有。
+/// JobObject 句柄在单线程内使用，仅用于让 async future 满足 Send 约束。
+struct SendHandle(HANDLE);
+unsafe impl Send for SendHandle {}
+
 /// 创建 JobObject 并设置 CPU 时间限制
-fn create_job_with_limits(cpu_secs: u64) -> Result<HANDLE, AppError> {
+fn create_job_with_limits(cpu_secs: u64) -> Result<SendHandle, AppError> {
     unsafe {
         let h_job = CreateJobObjectW(None, None)
             .map_err(|e| AppError::Other {
@@ -217,22 +216,21 @@ fn create_job_with_limits(cpu_secs: u64) -> Result<HANDLE, AppError> {
 
         let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         // PerJobUserTimeLimit 单位是 100ns
-        info.BasicLimitInformation.PerJobUserTimeLimit =
-            cpu_secs * 10_000_000;
+        info.BasicLimitInformation.PerJobUserTimeLimit = (cpu_secs * 10_000_000) as i64;
         info.BasicLimitInformation.LimitFlags =
             JOB_OBJECT_LIMIT_JOB_TIME | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 
         SetInformationJobObject(
             h_job,
             JobObjectExtendedLimitInformation,
-            &info,
+            &info as *const _ as *const std::ffi::c_void,
             std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         )
         .map_err(|e| AppError::Other {
             detail: format!("SetInformationJobObject 失败: {e}"),
         })?;
 
-        Ok(h_job)
+        Ok(SendHandle(h_job))
     }
 }
 
@@ -254,28 +252,6 @@ fn assign_process_to_job(h_job: HANDLE, pid: u32) -> Result<(), AppError> {
         let _ = CloseHandle(h_process);
         Ok(())
     }
-}
-
-/// 恢复进程主线程（CREATE_SUSPENDED 启动后需要 ResumeThread）
-fn resume_process(pid: u32) -> Result<(), AppError> {
-    use windows::Win32::System::Threading::OpenThread;
-    use windows::Win32::System::Threading::THREAD_SUSPEND_RESUME;
-
-    // 通过 CreateToolhelp32Snapshot 找到进程的主线程 ID
-    // 简化实现：用 NtResumeProcess 或直接通过 child.wait
-    // 实际上 tokio::process::Child 在 Windows 上 spawn 时如果用了 CREATE_SUSPENDED，
-    // 需要手动 ResumeThread。但 tokio Child 不暴露主线程句柄。
-    //
-    // 变通方案：用 NtResumeProcess（非公开 API），或改用 CREATE_SUSPENDED + 单独
-    // 调用 ResumeThread。
-    //
-    // 更简单的方案：不用 CREATE_SUSPENDED，直接在 spawn 后立即 AssignProcessToJobObject。
-    // Windows 8+ 允许把已启动的进程加入 JobObject（除非进程已创建子进程）。
-    // 这是教学场景，足够可靠。
-    //
-    // 因此本函数实际为 no-op，spawn 时不用 CREATE_SUSPENDED。
-    let _ = pid;
-    Ok(())
 }
 
 /// 终止 JobObject 内所有进程

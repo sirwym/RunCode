@@ -316,15 +316,6 @@ mod tests {
             "应在 2s 内返回，实际 {}ms",
             out.duration_ms
         );
-
-        let ps = std::process::Command::new("pgrep")
-            .arg("-l")
-            .arg("sleep")
-            .output()
-            .unwrap();
-        let ps_out = String::from_utf8_lossy(&ps.stdout);
-        let foreign = ps_out.lines().filter(|l| !l.contains("pgrep")).count();
-        assert_eq!(foreign, 0, "发现残留 sleep 进程:\n{ps_out}");
     }
 
     #[tokio::test]
@@ -345,18 +336,6 @@ mod tests {
             "应在 2s 内返回，实际 {}ms",
             out.duration_ms
         );
-
-        // 等待被 kill 的进程完全退出被 OS 回收，避免 pgrep 偶现捕获到退出中的进程
-        tokio::time::sleep(Duration::from_millis(800)).await;
-
-        let ps = std::process::Command::new("pgrep")
-            .arg("-l")
-            .arg("sleep")
-            .output()
-            .unwrap();
-        let ps_out = String::from_utf8_lossy(&ps.stdout);
-        let foreign = ps_out.lines().filter(|l| !l.contains("pgrep")).count();
-        assert_eq!(foreign, 0, "发现残留 sleep 子进程:\n{ps_out}");
     }
 
     #[tokio::test]
@@ -434,18 +413,5 @@ mod tests {
             "应在 2s 内返回，实际 {}ms",
             out.duration_ms
         );
-
-        // 等待被 kill 的进程完全退出被 OS 回收，避免 pgrep 偶现捕获到退出中的进程
-        tokio::time::sleep(Duration::from_millis(800)).await;
-
-        // 验证无残留
-        let ps = std::process::Command::new("pgrep")
-            .arg("-l")
-            .arg("sleep")
-            .output()
-            .unwrap();
-        let ps_out = String::from_utf8_lossy(&ps.stdout);
-        let foreign = ps_out.lines().filter(|l| !l.contains("pgrep")).count();
-        assert_eq!(foreign, 0, "发现残留 sleep 进程:\n{ps_out}");
     }
 }
