@@ -128,7 +128,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="w-[720px] h-[600px] max-w-none max-h-none p-0 flex flex-col">
+      <DialogContent className="w-[min(720px,calc(100vw-32px))] h-[min(600px,calc(100vh-32px))] max-w-none max-h-none p-0 flex flex-col">
         <DialogHeader className="px-6 pt-5 pb-3 border-b border-border flex-shrink-0">
           <DialogTitle>{t("settings.title")}</DialogTitle>
         </DialogHeader>

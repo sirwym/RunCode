@@ -373,28 +373,30 @@ function App() {
       unlistens.push(await listen("menu-edit-format", () => void formatRef.current()));
 
       // 查找菜单 → Monaco 触发
-      unlistens.push(
-        await listen("menu-find", () => editorRef.current?.trigger("actions.find")),
-      );
+      const triggerFind = (action: string) => {
+        const handle = editorRef.current;
+        if (!handle) return;
+        handle.focus(); // 防御：确保编辑器有焦点，避免 action disabled
+        handle.trigger(action);
+      };
+      unlistens.push(await listen("menu-find", () => triggerFind("actions.find")));
       unlistens.push(
         await listen("menu-find-next", () =>
-          editorRef.current?.trigger("editor.action.nextMatchFindAction"),
+          triggerFind("editor.action.nextMatchFindAction"),
         ),
       );
       unlistens.push(
         await listen("menu-find-prev", () =>
-          editorRef.current?.trigger("editor.action.previousMatchFindAction"),
+          triggerFind("editor.action.previousMatchFindAction"),
         ),
       );
       unlistens.push(
         await listen("menu-replace", () =>
-          editorRef.current?.trigger("editor.action.startFindReplaceAction"),
+          triggerFind("editor.action.startFindReplaceAction"),
         ),
       );
       unlistens.push(
-        await listen("menu-goto-line", () =>
-          editorRef.current?.trigger("editor.action.gotoLine"),
-        ),
+        await listen("menu-goto-line", () => triggerFind("editor.action.gotoLine")),
       );
     };
     void setup();
@@ -485,6 +487,7 @@ function App() {
           className={
             "panel-resize-handle" + (panelCollapsed ? " collapsed" : "")
           }
+          hitAreaMargins={{ coarse: 20, fine: 10 }}
         />
         <Panel
           ref={rightPanelRef}

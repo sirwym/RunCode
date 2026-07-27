@@ -32,6 +32,10 @@ package-lock.json
 # 临时图片（对话中处理的输入/产物，未在代码中引用）
 logo.png
 logo_processed.png
+image.png
+
+# pnpm 本地缓存（不应提交）
+.pnpm-store/
 
 # TDM-GCC 升级脚本临时产物（prepare-tdm-gcc.ps1 使用）
 build/

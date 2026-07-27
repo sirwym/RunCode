@@ -1,6 +1,10 @@
 # RunCode
 
-> 轻量级跨平台 C++ 教学编辑器（macOS + Windows），专为 OI / 算法教学场景设计
+<p align="center">
+  <img src="src-tauri/icons/128x128.png" alt="RunCode" width="96" height="96">
+</p>
+
+> 专业、沉稳的 C++ 教学开发工具 — 轻量级跨平台 C++ 教学编辑器（macOS + Windows），专为 OI / 算法教学场景设计
 
 ![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%2B-0078D6?logo=windows&logoColor=white)
@@ -18,7 +22,7 @@
 - **时间限制判定** — 单例超时判失败（OI 友好，默认 1000ms，可配置）
 - **实时终端** — PTY 终端支持交互式输入（macOS forkpty / Windows ConPTY）
 - **代码格式化** — tree-sitter 解析 + 内置 formatter
-- **Lyra 全直角风格** — 中性灰配色，UI 与代码统一 JetBrains Mono
+- **Lyra 全直角风格** — Graphite 中性灰 + RunCode Slate 品牌交互色，UI 与代码统一 JetBrains Mono（详见 [ADR-0006](docs/adr/0006-runcode-brand-color-system.md)）
 - **中英文界面切换** — 编辑器界面支持中 / 英双语
 - **主题切换** — Dark / Light / System 跟随系统
 - **可折叠面板** — 左右 / 上下分栏自由切换
@@ -33,13 +37,6 @@
 - **无 Electron 包袱**：不打包 Chromium 内核，系统 webview 原生渲染
 
 适合教学场景对资源占用敏感的机房环境。
-
-## 截图
-
-![主界面](docs/images/main.png)
-![多样例测试](docs/images/tests.png)
-
-> 截图为占位图，可手动替换 `docs/images/main.png` 和 `docs/images/tests.png` 为真实截图。
 
 ## 快速开始
 
@@ -82,6 +79,7 @@ pnpm tauri dev
 
 ## 文档
 
+- [品牌指南](./docs/brand-guidelines.md)
 - [构建与签名指南（macOS + Windows）](./BUILD.md)
 - [AI 协作规范](./AGENTS.md)
 - [架构决策记录 (ADR)](./docs/adr/README.md)

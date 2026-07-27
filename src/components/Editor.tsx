@@ -10,7 +10,50 @@ import type { editor as MonacoEditorNS, languages as MonacoLanguagesNS } from "m
 import { invoke } from "@tauri-apps/api/core";
 import type { EditorSettings, CompileError } from "../types";
 import { useTabs } from "../hooks/useTabs";
-import { CPP_SNIPPETS } from "../monaco/cppSnippets";
+import { CPP_KEYWORDS_ALL, type KeywordKind } from "../monaco/cppKeywords";
+
+// RunCode 品牌交互色（与 global.css 深色主题一致）
+// Monaco colors 仅接受 HEX（3/4/6/8 位），rgba() 会被忽略并回退到默认色（红色）
+export const RUNCODE_DARK_COLORS: Record<string, string> = {
+  "editorCursor.foreground": "#6f91d5",
+  "editor.selectionBackground": "#4A74C64D",
+  "editor.inactiveSelectionBackground": "#4A74C626",
+  "editor.selectionHighlightBackground": "#4A74C633",
+  "editor.lineHighlightBackground": "#4A74C61A",
+  "editor.lineHighlightBorder": "#00000000",
+  "editor.focusBorder": "#6f91d5",
+  "editorWidget.focusBorder": "#6f91d5",
+  "editorSuggestWidget.focusBorder": "#6f91d5",
+  "inputOption.activeBorder": "#6f91d5",
+  "editorBracketMatch.border": "#6f91d5",
+};
+
+// RunCode 品牌交互色（与 global.css 浅色主题一致）
+// Monaco colors 仅接受 HEX（3/4/6/8 位），rgba() 会被忽略并回退到默认色（红色）
+export const RUNCODE_LIGHT_COLORS: Record<string, string> = {
+  "editorCursor.foreground": "#365eaa",
+  "editor.selectionBackground": "#365EAA40",
+  "editor.inactiveSelectionBackground": "#365EAA1F",
+  "editor.selectionHighlightBackground": "#365EAA2E",
+  "editor.lineHighlightBackground": "#365EAA0F",
+  "editor.lineHighlightBorder": "#00000000",
+  "editor.focusBorder": "#365eaa",
+  "editorWidget.focusBorder": "#365eaa",
+  "editorSuggestWidget.focusBorder": "#365eaa",
+  "inputOption.activeBorder": "#365eaa",
+  "editorBracketMatch.border": "#365eaa",
+};
+
+// 持久化 settings.editor.theme → 渲染层 Monaco 主题映射
+// - vs-dark → runcode-dark（继承 vs-dark，仅覆盖光标/选区/当前行/焦点）
+// - vs      → runcode-light（继承 vs，仅覆盖上述色）
+// - hc-black 保留原样（高对比度主题不品牌化）
+export function mapMonacoTheme(persisted: string | undefined, fallback: "dark" | "light" | undefined): string {
+  if (persisted === "hc-black") return "hc-black";
+  if (persisted === "vs") return "runcode-light";
+  if (persisted === "vs-dark") return "runcode-dark";
+  return fallback === "light" ? "runcode-light" : "runcode-dark";
+}
 
 // 后端返回的符号结构
 interface CodeSymbol {
@@ -138,6 +181,21 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
     editorRef.current = editor;
     monacoRef.current = monaco;
 
+    // 定义 runcode-dark / runcode-light 继承主题
+    // 保留 vs-dark / vs 原始语法高亮规则，仅覆盖光标/选区/当前行/焦点等交互色
+    monaco.editor.defineTheme("runcode-dark", {
+      base: "vs-dark",
+      inherit: true,
+      rules: [],
+      colors: RUNCODE_DARK_COLORS,
+    });
+    monaco.editor.defineTheme("runcode-light", {
+      base: "vs",
+      inherit: true,
+      rules: [],
+      colors: RUNCODE_LIGHT_COLORS,
+    });
+
     // 注册 Cmd+Enter / Ctrl+Enter 触发运行
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       onRun();
@@ -175,8 +233,16 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
       }
     }
 
-    // 代码补全 L1：OI 竞赛 snippet
-    const snippetDisposable = monaco.languages.registerCompletionItemProvider("cpp", {
+    // 代码补全 L0：C++ 关键词 + STL（纯文本补全，无 snippet 占位符）
+    const keywordKindMap: Record<KeywordKind, MonacoLanguagesNS.CompletionItemKind> = {
+      Keyword: monaco.languages.CompletionItemKind.Keyword,
+      Class: monaco.languages.CompletionItemKind.Class,
+      Function: monaco.languages.CompletionItemKind.Function,
+      Variable: monaco.languages.CompletionItemKind.Variable,
+      Constant: monaco.languages.CompletionItemKind.Constant,
+      Module: monaco.languages.CompletionItemKind.Module,
+    };
+    const keywordDisposable = monaco.languages.registerCompletionItemProvider("cpp", {
       provideCompletionItems: (model, position) => {
         const word = model.getWordUntilPosition(position);
         const range = {
@@ -186,18 +252,18 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
           endColumn: word.endColumn,
         };
         return {
-          suggestions: CPP_SNIPPETS.map((s) => ({
-            label: s.label,
-            kind: monaco.languages.CompletionItemKind.Snippet,
-            insertText: s.insertText,
-            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-            detail: s.detail,
+          suggestions: CPP_KEYWORDS_ALL.map((k) => ({
+            label: k.label,
+            kind: keywordKindMap[k.kind],
+            insertText: k.label,
+            detail: k.detail,
+            sortText: "0_" + k.label,
             range,
           })),
         };
       },
     });
-    completionDisposablesRef.current.push(snippetDisposable);
+    completionDisposablesRef.current.push(keywordDisposable);
 
     // 代码补全 L2：当前文件符号（函数/全局变量/struct/宏）
     const symbolDisposable = monaco.languages.registerCompletionItemProvider("cpp", {
@@ -237,13 +303,9 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
     completionDisposablesRef.current.push(symbolDisposable);
   }, [onRun]);
 
-  // 计算 Monaco 主题：editor.theme 优先，否则用软件 effectiveTheme 推断
-  const monacoTheme =
-    settings?.theme === "vs" ? "vs"
-    : settings?.theme === "hc-black" ? "hc-black"
-    : settings?.theme === "vs-dark" ? "vs-dark"
-    : theme === "light" ? "vs"
-    : "vs-dark";
+  // 计算 Monaco 主题：持久化值经渲染层映射为 runcode-* 继承主题
+  // settings.editor.theme 仍保存 vs-dark / vs / hc-black，避免设置迁移
+  const monacoTheme = mapMonacoTheme(settings?.theme, theme);
 
   // settings 变化时实时更新 Monaco 选项
   useEffect(() => {

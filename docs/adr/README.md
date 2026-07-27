@@ -11,6 +11,7 @@
 | [0003](0003-test-settings-split-from-runtime.md) | TestSettings 从 RuntimeSettings 拆分 | Accepted | 2026-07-25 |
 | [0004](0004-test-case-time-limit.md) | 多样例测试时间限制机制 | Accepted | 2026-07-25 |
 | [0005](0005-lucide-react-icon-unification.md) | lucide-react 图标库统一 | Accepted | 2026-07-26 |
+| [0006](0006-runcode-brand-color-system.md) | RunCode 品牌色与主题令牌系统 | Accepted | 2026-07-27 |
 
 ## 模板
 

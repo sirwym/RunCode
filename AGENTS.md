@@ -42,7 +42,12 @@ RunCode 是一个轻量级跨平台 C++ 教学编辑器（macOS + Windows），�
 ### 1. UI 风格
 
 - **Lyra 全直角风格**：所有圆角为 0（`--radius-*: 0px`）
-- **中性灰配色**：dark / light / system 三主题
+- **Graphite 中性灰 + RunCode Slate 品牌交互色**：dark / light / system 三主题（详见 ADR-0006）
+  - 中性灰用于背景、面板、普通工具按钮、标题与正文
+  - 品牌交互色（`--primary` 等）用于标志、主操作按钮、Switch 选中、Tabs 活动态、活动文件标签、面板标签、拖拽分隔条、测试运行中状态、进度条、表单焦点环
+  - 停止按钮保留错误红，禁止品牌蓝泛滥
+  - 组件优先使用 CSS 变量 / Tailwind 主题 token，禁止散落品牌 HEX
+  - Code Teal 仅用于品牌指南与宣传材料，不进入核心 UI 状态
 - **JetBrains Mono 统一字体**：UI 与代码用同一字体（详见 ADR-0002）
 - 优先复用现有组件，胶囊形按钮（实际无圆角）+ 微妙 hover 效果 + 字体层级
 
@@ -110,6 +115,7 @@ cd src-tauri && cargo test   # 后端 Rust 测试
 | [ADR-0003](docs/adr/0003-test-settings-split-from-runtime.md) | TestSettings 独立结构 | 测试设置在 `AppSettings.test` 中 |
 | [ADR-0004](docs/adr/0004-test-case-time-limit.md) | 测试时间限制机制 | judge_case_passed 纯函数 + 默认 1000ms |
 | [ADR-0005](docs/adr/0005-lucide-react-icon-unification.md) | lucide-react 图标库统一 | 所有图标必须用 lucide-react |
+| [ADR-0006](docs/adr/0006-runcode-brand-color-system.md) | RunCode 品牌色与主题令牌系统 | 品牌交互色必须用令牌，禁止散落 HEX；图标资产禁改 |
 
 ## Git 协作规范
 

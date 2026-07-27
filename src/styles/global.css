@@ -1,30 +1,45 @@
 /* ==========================================================================
-   全局样式：C++ 教学编辑器
-   - shadcn Lyra + Neutral 配色（全直角无圆角）
+   全局样式：RunCode C++ 教学编辑器
+   - Lyra 全直角 + Graphite 中性灰 + RunCode Slate 品牌交互色
    - UI 与代码统一 JetBrains Mono 字体
    - CSS Grid 布局：Toolbar / Editor + Output / StatusBar
    ========================================================================== */
 
 :root {
-  /* 颜色（Lyra + Neutral 深色） */
+  /* 品牌交互色（RunCode Slate，深色主题适配色） */
+  --primary: #3b65b8;
+  --primary-hover: #4a74c6;
+  --primary-foreground: #ffffff;
+  --primary-soft: rgba(74, 116, 198, 0.14);
+  --primary-border: rgba(74, 116, 198, 0.40);
+  --focus-ring: #6f91d5;
+  --selection: rgba(74, 116, 198, 0.30);
+
+  /* Graphite 中性灰（深色） */
   --bg: #0a0a0a;
   --panel-bg: #141414;
   --panel-bg-alt: #1c1c1c;
   --border: #262626;
   --text: #fafafa;
   --text-muted: #a3a3a3;
-  --primary: #fafafa;
-  --primary-hover: #e5e5e5;
-  --success: #22c55e;
-  --error: #ef4444;
-  --warning: #eab308;
+
+  /* 语义色（深色） */
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.12);
+  --success-border: rgba(74, 222, 128, 0.40);
+  --warning: #facc15;
+  --warning-soft: rgba(250, 204, 21, 0.12);
+  --warning-border: rgba(250, 204, 21, 0.40);
+  --error: #f87171;
+  --error-soft: rgba(248, 113, 113, 0.12);
+  --error-border: rgba(248, 113, 113, 0.40);
 
   /* 终端背景（与 xterm 深色主题一致） */
   --bg-terminal: #0a0a0a;
 
   /* 编译错误行高亮（半透明红底 + 左侧红边） */
-  --compile-error-bg: rgba(239, 68, 68, 0.12);
-  --compile-error-border: #ef4444;
+  --compile-error-bg: var(--error-soft);
+  --compile-error-border: var(--error);
 
   /* 间距 */
   --space-xs: 4px;
@@ -51,45 +66,85 @@
     "Hiragino Sans GB", "Microsoft YaHei", monospace;
 }
 
-/* 浅色主题（Lyra + Neutral 浅色） */
+/* 浅色主题（Graphite 浅色 + RunCode Slate 浅色适配色） */
 :root[data-theme="light"] {
+  /* 品牌交互色（Light） */
+  --primary: #365eaa;
+  --primary-hover: #2f5498;
+  --primary-foreground: #ffffff;
+  --primary-soft: rgba(54, 94, 170, 0.10);
+  --primary-border: rgba(54, 94, 170, 0.40);
+  --focus-ring: #365eaa;
+  --selection: rgba(54, 94, 170, 0.25);
+
+  /* Graphite 中性灰（浅色） */
   --bg: #ffffff;
   --panel-bg: #fafafa;
   --panel-bg-alt: #f5f5f5;
   --border: #e5e5e5;
   --text: #0a0a0a;
   --text-muted: #737373;
-  --primary: #171717;
-  --primary-hover: #262626;
-  --success: #16a34a;
-  --error: #dc2626;
-  --warning: #ca8a04;
+
+  /* 语义色（浅色） */
+  --success: #15803d;
+  --success-soft: rgba(21, 128, 61, 0.10);
+  --success-border: rgba(21, 128, 61, 0.40);
+  --warning: #a16207;
+  --warning-soft: rgba(161, 98, 7, 0.10);
+  --warning-border: rgba(161, 98, 7, 0.40);
+  --error: #b91c1c;
+  --error-soft: rgba(185, 28, 28, 0.10);
+  --error-border: rgba(185, 28, 28, 0.40);
+
   /* 终端背景（与 xterm 浅色主题一致） */
   --bg-terminal: #ffffff;
-  /* 编译错误行高亮（浅色主题用更深的红） */
-  --compile-error-bg: rgba(220, 38, 38, 0.10);
-  --compile-error-border: #dc2626;
+  /* 编译错误行高亮 */
+  --compile-error-bg: var(--error-soft);
+  --compile-error-border: var(--error);
 }
 
 /* system 主题：跟随系统偏好 */
 @media (prefers-color-scheme: light) {
   :root[data-theme="system"] {
+    /* 品牌交互色（Light） */
+    --primary: #365eaa;
+    --primary-hover: #2f5498;
+    --primary-foreground: #ffffff;
+    --primary-soft: rgba(54, 94, 170, 0.10);
+    --primary-border: rgba(54, 94, 170, 0.40);
+    --focus-ring: #365eaa;
+    --selection: rgba(54, 94, 170, 0.25);
+
+    /* Graphite 中性灰（浅色） */
     --bg: #ffffff;
     --panel-bg: #fafafa;
     --panel-bg-alt: #f5f5f5;
     --border: #e5e5e5;
     --text: #0a0a0a;
     --text-muted: #737373;
-    --primary: #171717;
-    --primary-hover: #262626;
-    --success: #16a34a;
-    --error: #dc2626;
-    --warning: #ca8a04;
-    /* 终端背景（与 xterm 浅色主题一致） */
+
+    /* 语义色（浅色） */
+    --success: #15803d;
+    --success-soft: rgba(21, 128, 61, 0.10);
+    --success-border: rgba(21, 128, 61, 0.40);
+    --warning: #a16207;
+    --warning-soft: rgba(161, 98, 7, 0.10);
+    --warning-border: rgba(161, 98, 7, 0.40);
+    --error: #b91c1c;
+    --error-soft: rgba(185, 28, 28, 0.10);
+    --error-border: rgba(185, 28, 28, 0.40);
+
+    /* 终端背景 */
     --bg-terminal: #ffffff;
-    --compile-error-bg: rgba(220, 38, 38, 0.10);
-    --compile-error-border: #dc2626;
+    --compile-error-bg: var(--error-soft);
+    --compile-error-border: var(--error);
   }
+}
+
+/* 文本选区：使用品牌交互令牌 */
+::selection {
+  background-color: var(--selection);
+  color: var(--text);
 }
 
 /* ============== body 重置 ============== */
@@ -152,63 +207,41 @@ body {
 /* 拖动分隔条（Lyra 全直角风格）
  * react-resizable-panels@2.x 把方向属性挂在 handle 自身上：
  *   data-panel-group-direction="horizontal" | "vertical"
- * 水平布局（左右分栏）：分隔条竖立，宽度 1px，col-resize
- * 垂直布局（上下分栏）：分隔条横躺，高度 1px，row-resize
+ * 水平布局（左右分栏）：分隔条竖立，宽度 3px，col-resize
+ * 垂直布局（上下分栏）：分隔条横躺，高度 3px，row-resize
+ * 命中区域由 PanelResizeHandle 的 hitAreaMargins prop 控制（App.tsx），
+ * 不依赖伪元素扩展（伪元素不参与库的命中计算）
  */
 .panel-resize-handle {
   background: var(--border);
   flex-shrink: 0;
   position: relative;
+  touch-action: none;
   transition: width 0.15s, height 0.15s, background-color 0.15s;
 }
 
 /* 水平布局（左右分栏）：默认形态 */
 .panel-resize-handle[data-panel-group-direction="horizontal"] {
-  width: 1px;
+  width: 3px;
   height: 100%;
   cursor: col-resize;
 }
 
 .panel-resize-handle[data-panel-group-direction="horizontal"]:hover,
 .panel-resize-handle[data-panel-group-direction="horizontal"][data-resize-handle-state="drag"] {
-  width: 2px;
   background: var(--primary);
-}
-
-/* 水平布局：扩大点击区域（左右各扩 3px） */
-.panel-resize-handle[data-panel-group-direction="horizontal"]::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -3px;
-  right: -3px;
-  z-index: 10;
 }
 
 /* 垂直布局（上下分栏）：分隔条横躺 */
 .panel-resize-handle[data-panel-group-direction="vertical"] {
   width: 100%;
-  height: 1px;
+  height: 3px;
   cursor: row-resize;
 }
 
 .panel-resize-handle[data-panel-group-direction="vertical"]:hover,
 .panel-resize-handle[data-panel-group-direction="vertical"][data-resize-handle-state="drag"] {
-  height: 2px;
-  width: 100%;
   background: var(--primary);
-}
-
-/* 垂直布局：扩大点击区域（上下各扩 4px，满足硬验收要求） */
-.panel-resize-handle[data-panel-group-direction="vertical"]::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: -4px;
-  bottom: -4px;
-  z-index: 10;
 }
 
 /* Panel 折叠时弱化 handle（避免误操作，但仍可点击展开） */
@@ -218,15 +251,6 @@ body {
 
 .panel-resize-handle.collapsed:hover {
   background: var(--border);
-}
-
-.panel-resize-handle[data-panel-group-direction="horizontal"].collapsed:hover {
-  width: 1px;
-}
-
-.panel-resize-handle[data-panel-group-direction="vertical"].collapsed:hover {
-  height: 1px;
-  width: 100%;
 }
 
 /* ============== 标签栏 ============== */
@@ -281,6 +305,7 @@ body {
 .tab-item.active {
   background-color: var(--bg);
   color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--primary);
 }
 
 .tab-name {
@@ -375,7 +400,7 @@ body {
 .btn-primary {
   background-color: var(--primary);
   border-color: var(--primary);
-  color: var(--bg);
+  color: var(--primary-foreground);
 }
 
 .btn-primary:hover {
@@ -488,6 +513,13 @@ body {
   color: var(--success);
 }
 
+/* 窄窗口下低优先级信息隐藏（保留运行状态、运行/格式化、光标、编译器） */
+@media (max-width: 900px) {
+  .status-bar .status-item-low-priority {
+    display: none;
+  }
+}
+
 /* 状态点（装饰性圆点保留 border-radius: 50%） */
 .status-bar .status-dot {
   display: inline-block;
@@ -553,6 +585,7 @@ body {
   color: var(--text);
   background-color: var(--bg);
   border-color: var(--border);
+  box-shadow: inset 0 -2px 0 var(--primary);
 }
 
 /* 面板右上角关闭按钮（Lucide X 图标），靠右对齐 */
@@ -619,8 +652,8 @@ body {
 
 /* ============== 编译错误行高亮 ============== */
 .compile-error-line {
-  background: var(--compile-error-bg, rgba(239, 68, 68, 0.12));
-  border-left: 2px solid var(--compile-error-border, #ef4444);
+  background: var(--compile-error-bg);
+  border-left: 2px solid var(--compile-error-border);
 }
 
 /* ============== 小号按钮 ============== */
@@ -673,12 +706,12 @@ body {
 
 .testcases-header .test-summary.summary-pass {
   color: var(--success);
-  border-color: rgba(34, 197, 94, 0.4);
+  border-color: var(--success-border);
 }
 
 .testcases-header .test-summary.summary-fail {
   color: var(--error);
-  border-color: rgba(239, 68, 68, 0.4);
+  border-color: var(--error-border);
 }
 
 .testcases-header .testcases-spacer {
@@ -709,8 +742,8 @@ body {
 
 .strict-toggle.active {
   color: var(--warning);
-  border-color: rgba(234, 179, 8, 0.4);
-  background-color: rgba(234, 179, 8, 0.08);
+  border-color: var(--warning-border);
+  background-color: var(--warning-soft);
 }
 
 .strict-toggle input {
@@ -729,9 +762,9 @@ body {
 .testcases-compile-error {
   margin: var(--space-sm) var(--space-lg);
   padding: var(--space-sm) var(--space-md);
-  border: 1px solid rgba(239, 68, 68, 0.4);
+  border: 1px solid var(--error-border);
   border-radius: 0;
-  background-color: rgba(239, 68, 68, 0.08);
+  background-color: var(--error-soft);
   font-size: 12px;
   color: var(--error);
   flex: 0 0 auto;
@@ -740,9 +773,9 @@ body {
 .testcases-import-msg {
   margin: var(--space-sm) var(--space-lg);
   padding: var(--space-sm) var(--space-md);
-  border: 1px solid rgba(250, 250, 250, 0.4);
+  border: 1px solid var(--border);
   border-radius: 0;
-  background-color: rgba(250, 250, 250, 0.08);
+  background-color: var(--panel-bg-alt);
   font-size: 12px;
   color: var(--text);
   flex: 0 0 auto;
@@ -799,11 +832,11 @@ body {
 }
 
 .testcase-card.passed {
-  border-color: rgba(34, 197, 94, 0.4);
+  border-color: var(--success-border);
 }
 
 .testcase-card.failed {
-  border-color: rgba(239, 68, 68, 0.4);
+  border-color: var(--error-border);
 }
 
 .testcase-card-header {
@@ -830,12 +863,12 @@ body {
 
 .testcase-badge.badge-pass {
   color: var(--success);
-  background-color: rgba(34, 197, 94, 0.12);
+  background-color: var(--success-soft);
 }
 
 .testcase-badge.badge-fail {
   color: var(--error);
-  background-color: rgba(239, 68, 68, 0.12);
+  background-color: var(--error-soft);
 }
 
 .testcase-card-header .testcase-duration {
@@ -863,7 +896,7 @@ body {
 }
 
 .testcase-card-header .btn-icon:hover {
-  background-color: rgba(239, 68, 68, 0.15);
+  background-color: var(--error-soft);
   color: var(--error);
 }
 
@@ -912,7 +945,7 @@ body {
 }
 
 .testcase-field .field-textarea:focus {
-  background-color: rgba(250, 250, 250, 0.05);
+  background-color: var(--primary-soft);
 }
 
 /* ============== 3 列布局：实际列只读 ============== */
@@ -938,7 +971,7 @@ body {
 }
 
 .testcase-field .field-readonly.field-actual {
-  background-color: rgba(239, 68, 68, 0.04);
+  background-color: var(--error-soft);
 }
 
 .testcase-field .field-actual-placeholder {
@@ -991,9 +1024,10 @@ body {
 }
 
 /* ============== diff Modal ============== */
+/* 基于视口的最大宽高，保证 800×600 最小窗口不溢出 */
 .diff-dialog-content {
-  width: 1000px;
-  height: 700px;
+  width: min(1000px, calc(100vw - 32px));
+  height: min(700px, calc(100vh - 32px));
   max-width: none;
   max-height: none;
   padding: 0;
@@ -1100,7 +1134,7 @@ body {
 .diff-line.modified,
 .diff-line.removed,
 .diff-line.added {
-  background-color: rgba(239, 68, 68, 0.12);
+  background-color: var(--error-soft);
 }
 
 .diff-line.empty-side .diff-line-content {
@@ -1167,7 +1201,7 @@ body {
   font-size: 11px;
   color: var(--warning);
   padding: var(--space-xs) var(--space-sm);
-  background-color: rgba(234, 179, 8, 0.08);
+  background-color: var(--warning-soft);
   border-radius: 0;
 }
 
@@ -1175,7 +1209,7 @@ body {
   font-size: 11px;
   color: var(--error);
   padding: var(--space-xs) var(--space-sm);
-  background-color: rgba(239, 68, 68, 0.08);
+  background-color: var(--error-soft);
   border-radius: 0;
 }
 
@@ -1218,7 +1252,7 @@ body {
 /* ============== 运行中状态 ============== */
 .testcase-card.running {
   border-color: var(--primary);
-  box-shadow: 0 0 0 1px rgba(250, 250, 250, 0.25);
+  box-shadow: 0 0 0 1px var(--primary-border);
 }
 
 .testcase-card-header .testcase-running-dot {
@@ -1245,9 +1279,9 @@ body {
   font-weight: 600;
   padding: 2px 10px;
   border-radius: var(--radius-pill);
-  background-color: rgba(234, 179, 8, 0.12);
+  background-color: var(--warning-soft);
   color: var(--warning);
-  border: 1px solid rgba(234, 179, 8, 0.3);
+  border: 1px solid var(--warning-border);
 }
 
 .testcase-large-summary .large-size {
@@ -1271,11 +1305,7 @@ body {
 .test-progress-bar .test-progress-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  background: linear-gradient(
-    90deg,
-    rgba(250, 250, 250, 0.6) 0%,
-    rgba(229, 229, 229, 0.8) 100%
-  );
+  background: var(--primary);
   transition: width 0.25s ease;
   border-radius: var(--radius-pill);
 }
@@ -1288,7 +1318,7 @@ body {
   justify-content: center;
   font-size: 11px;
   font-weight: 600;
-  color: var(--text);
+  color: var(--primary-foreground);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   letter-spacing: 0.3px;
 }
@@ -1298,7 +1328,7 @@ body {
   margin: 0 0 var(--space-md) 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--primary);
+  color: var(--text);
   letter-spacing: 0.3px;
 }
 
@@ -1414,7 +1444,7 @@ body {
 }
 
 .recent-item-remove:hover {
-  background-color: rgba(239, 68, 68, 0.12);
+  background-color: var(--error-soft);
   color: var(--error);
 }
 
@@ -1422,7 +1452,7 @@ body {
   margin-top: var(--space-sm);
   padding: var(--space-sm);
   border-radius: 0;
-  background-color: rgba(239, 68, 68, 0.1);
+  background-color: var(--error-soft);
   color: var(--error);
   font-size: 12px;
 }

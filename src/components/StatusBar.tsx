@@ -64,14 +64,14 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
       </span>
 
       {runResult && (
-        <span className="status-item">
+        <span className="status-item status-item-low-priority">
           <span className="status-label">{t("status.duration")}:</span>
           {runResult.duration_ms} ms
         </span>
       )}
 
       {runResult && runResult.max_rss_kb > 0 && (
-        <span className="status-item">
+        <span className="status-item status-item-low-priority">
           <span className="status-label">{t("status.memory")}:</span>
           {formatMem(runResult.max_rss_kb)}
         </span>
@@ -104,17 +104,19 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
 
       <span className="status-divider" />
 
-      {/* 右侧：光标位置 + 缩进 + 编译器 + 参数 */}
+      {/* 右侧：光标位置 + 缩进 + 编译器 + 参数
+          窄窗口优先保留运行状态、运行/格式化、光标、编译器；
+          缩进/参数等低优先级信息在 900px 以下隐藏（见 global.css .status-item-low-priority） */}
       <span className="status-item">
         {t("status.cursorPos", { line: cursorLine, col: cursorColumn })}
       </span>
-      <span className="status-item">{indentText}</span>
+      <span className="status-item status-item-low-priority">{indentText}</span>
       <span className="status-item">
         <span className="status-label">{t("status.compiler")}</span>
         {compilerText}
       </span>
       {argsText && (
-        <span className="status-item">
+        <span className="status-item status-item-low-priority">
           <span className="status-label">{t("status.args")}</span>
           {argsText}
         </span>

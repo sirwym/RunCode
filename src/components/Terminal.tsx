@@ -6,18 +6,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 
-// xterm 深色主题：与原默认黑底一致
-const XTERM_DARK_THEME: XTermTheme = {
+// xterm 深色主题：背景与原默认黑底一致，光标/选区/ANSI blue 与 RunCode 主题协调
+// 注：xterm 主题需直接提供颜色字符串（运行时适配层），无法消费 CSS 变量；
+// 颜色值必须与 global.css / ADR-0006 中的品牌令牌保持一致，并由 Terminal.test.ts 验证
+export const XTERM_DARK_THEME: XTermTheme = {
   background: "#1e1e2e",
   foreground: "#d4d4d4",
-  cursor: "#d4d4d4",
+  cursor: "#6f91d5",
   cursorAccent: "#1e1e2e",
-  selectionBackground: "rgba(255, 255, 255, 0.2)",
+  selectionBackground: "rgba(74, 116, 198, 0.30)",
   black: "#000000",
   red: "#f48771",
   green: "#4ec9b0",
   yellow: "#dcdcaa",
-  blue: "#569cd6",
+  blue: "#3b65b8",
   magenta: "#c586c0",
   cyan: "#9cdcfe",
   white: "#d4d4d4",
@@ -25,24 +27,24 @@ const XTERM_DARK_THEME: XTermTheme = {
   brightRed: "#f48771",
   brightGreen: "#4ec9b0",
   brightYellow: "#dcdcaa",
-  brightBlue: "#569cd6",
+  brightBlue: "#4a74c6",
   brightMagenta: "#c586c0",
   brightCyan: "#9cdcfe",
   brightWhite: "#ffffff",
 };
 
-// xterm 浅色主题：与 CSS 浅色主题、Monaco vs 主题协调
-const XTERM_LIGHT_THEME: XTermTheme = {
+// xterm 浅色主题：背景与 CSS 浅色主题、Monaco vs 主题协调，光标/选区/ANSI blue 使用 RunCode Slate
+export const XTERM_LIGHT_THEME: XTermTheme = {
   background: "#ffffff",
   foreground: "#1e1e1e",
-  cursor: "#1e1e1e",
+  cursor: "#365eaa",
   cursorAccent: "#ffffff",
-  selectionBackground: "rgba(0, 122, 204, 0.2)",
+  selectionBackground: "rgba(54, 94, 170, 0.25)",
   black: "#000000",
   red: "#c0392b",
   green: "#2e8b57",
   yellow: "#b8860b",
-  blue: "#0066b8",
+  blue: "#365eaa",
   magenta: "#8e44ad",
   cyan: "#16a085",
   white: "#1e1e1e",
@@ -50,7 +52,7 @@ const XTERM_LIGHT_THEME: XTermTheme = {
   brightRed: "#c0392b",
   brightGreen: "#2e8b57",
   brightYellow: "#b8860b",
-  brightBlue: "#0066b8",
+  brightBlue: "#2f5498",
   brightMagenta: "#8e44ad",
   brightCyan: "#16a085",
   brightWhite: "#000000",
