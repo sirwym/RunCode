@@ -41,7 +41,7 @@ pnpm tauri dev
 
 - macOS 11+（aarch64 / x86_64）
 - Windows 10 1903+（x86_64）
-- Node.js 20.19+ 或 22.12+、pnpm、Rust toolchain（rustup）
+- Node.js 22.13+（LTS）、pnpm、Rust toolchain（rustup）
 
 **编译器**：
 
