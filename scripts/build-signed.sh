@@ -94,7 +94,7 @@ pnpm tauri build
 # ============ 验证签名 ============
 echo ""
 echo "=== 验证签名 ==="
-APP_PATH="src-tauri/target/release/bundle/macos/CppTeach.app"
+APP_PATH="src-tauri/target/release/bundle/macos/RunCode.app"
 DMG_PATH=$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1 || true)
 
 if [ -d "$APP_PATH" ]; then

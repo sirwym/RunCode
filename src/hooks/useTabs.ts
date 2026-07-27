@@ -4,6 +4,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { getT } from "./useI18n";
 import { useI18n } from "./useI18n";
 import { useSettings } from "./useSettings";
+import { useRunManager } from "./useRunManager";
 import type { AppErrorPayload, Tab, TabLanguage } from "../types";
 
 // 生成唯一 ID（浏览器内置 crypto.randomUUID，回退到时间戳）
@@ -18,7 +19,7 @@ const STORAGE_KEY = "runcode:tabs";
 const ACTIVE_KEY = "runcode:activeTabId";
 
 // 默认 C++ 模板：当 settings.compiler.template 缺失时回退使用
-const DEFAULT_CPP_TEMPLATE = `#include <iostream>
+const DEFAULT_CPP_TEMPLATE = `#include <bits/stdc++.h>
 using namespace std;
 
 int main() {
@@ -232,6 +233,8 @@ export const useTabs = create<TabsState>((set, get) => ({
     saveActiveId(get().activeId);
     // 通知外部 dispose 已删除 tab 的 model
     onCloseTabsCb?.([id]);
+    // 清理该 tab 的运行结果快照，避免内存泄漏
+    useRunManager.getState().clearTab(id);
   },
 
   closeAll: async () => {
@@ -254,6 +257,10 @@ export const useTabs = create<TabsState>((set, get) => ({
     persistTabs([]);
     saveActiveId(null);
     onCloseTabsCb?.(closedIds);
+    // 清理所有关闭 tab 的运行结果快照
+    for (const id of closedIds) {
+      useRunManager.getState().clearTab(id);
+    }
   },
 
   switchTab: (id) => {

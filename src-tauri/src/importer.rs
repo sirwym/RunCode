@@ -130,8 +130,8 @@ pub fn import_from_zip(
     // 配对
     let pairs = pair_filename_map(&file_map);
 
-    // 第二次遍历：读取配对文件内容并导入
-    let mut imported = 0;
+    // 第二次遍历：读取配对文件内容，收集后批量导入
+    let mut cases = Vec::with_capacity(pairs.len());
     let mut skipped = Vec::new();
 
     for pair in &pairs {
@@ -158,18 +158,12 @@ pub fn import_from_zip(
             entry.read_to_end(&mut expected_buf)?;
         }
 
-        match TestSuite::add_case_from_bytes(
-            base,
-            suite_id,
-            pair.name.clone(),
-            &input_buf,
-            &expected_buf,
-            strict,
-        ) {
-            Ok(_) => imported += 1,
-            Err(e) => skipped.push(format!("{}: {e}", pair.name)),
-        }
+        cases.push((pair.name.clone(), input_buf, expected_buf, strict));
     }
+
+    // 批量导入：清单只读一次 + 只写一次
+    let (imported, batch_skipped) = TestSuite::add_cases_batch(base, suite_id, cases)?;
+    skipped.extend(batch_skipped);
 
     Ok(ImportResult { imported, skipped })
 }
@@ -181,7 +175,8 @@ fn import_pairs(
     strict: bool,
     pairs: &[Pair],
 ) -> Result<ImportResult, AppError> {
-    let mut imported = 0;
+    // 先读取所有配对文件内容（文件读取失败在此阶段跳过，不进入批量导入）
+    let mut cases = Vec::with_capacity(pairs.len());
     let mut skipped = Vec::new();
 
     for pair in pairs {
@@ -199,19 +194,12 @@ fn import_pairs(
                 continue;
             }
         };
-
-        match TestSuite::add_case_from_bytes(
-            base,
-            suite_id,
-            pair.name.clone(),
-            &input,
-            &expected,
-            strict,
-        ) {
-            Ok(_) => imported += 1,
-            Err(e) => skipped.push(format!("{}: {e}", pair.name)),
-        }
+        cases.push((pair.name.clone(), input, expected, strict));
     }
+
+    // 批量导入：清单只读一次 + 只写一次
+    let (imported, batch_skipped) = TestSuite::add_cases_batch(base, suite_id, cases)?;
+    skipped.extend(batch_skipped);
 
     Ok(ImportResult { imported, skipped })
 }

@@ -26,6 +26,8 @@ interface TestSuiteState {
   importCases: (source: string, strict: boolean) => Promise<ImportResult>;
   // 重新加载 previews
   refresh: () => Promise<void>;
+  // 获取用例完整期望输出（用于 diff Modal 按需加载）
+  getFullExpected: (caseId: string) => Promise<string>;
 }
 
 async function loadSuite(id: string): Promise<{ manifest: TestSuiteManifest; previews: CasePreview[] }> {
@@ -131,5 +133,11 @@ export const useTestSuite = create<TestSuiteState>((set, get) => ({
     } catch {
       // 忽略
     }
+  },
+
+  getFullExpected: async (caseId) => {
+    const { suiteId } = get();
+    if (!suiteId) throw new Error("套件未初始化");
+    return await invoke<string>("get_case_full_expected", { suiteId, caseId });
   },
 }));

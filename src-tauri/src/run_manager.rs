@@ -87,6 +87,15 @@ impl RunManager {
         }
     }
 
+    /// 取消所有活动会话（应用退出时调用，防止后端继续运行）
+    pub fn cancel_all(&self) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            for session in sessions.values_mut() {
+                session.cancel_tx.take();
+            }
+        }
+    }
+
     /// 当前是否有活动会话
     #[allow(dead_code)]
     pub fn is_busy(&self) -> bool {
@@ -100,5 +109,45 @@ impl RunManager {
 impl Default for RunManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancel_all_drops_all_senders() {
+        let manager = RunManager::new();
+        let (_id1, mut rx1) = manager.register(RunKind::CompileRun).unwrap();
+        // register 第二个前需 complete 第一个（单活动任务互斥）
+        manager.complete(&_id1);
+        let (_id2, mut rx2) = manager.register(RunKind::TestRun).unwrap();
+
+        // 重新注册第一个，使两个 session 同时存在
+        // 但 register 互斥，所以用 cancel_all 测试单 session 场景
+        manager.cancel_all();
+
+        // cancel_all 后 receiver 应收到 Err（Sender 被 drop）
+        match rx2.try_recv() {
+            Err(_) => {} // 预期：Sender 被 drop
+            Ok(_) => panic!("expected receiver to be closed after cancel_all"),
+        }
+        // rx1 的 Sender 在 complete 时已 drop
+        assert!(rx1.try_recv().is_err());
+    }
+
+    #[test]
+    fn cancel_all_clears_busy_state() {
+        let manager = RunManager::new();
+        let (id, _rx) = manager.register(RunKind::CompileRun).unwrap();
+        assert!(manager.is_busy());
+
+        manager.cancel_all();
+        // cancel_all 只 drop Sender，不移除 session，仍 busy
+        assert!(manager.is_busy());
+
+        manager.complete(&id);
+        assert!(!manager.is_busy());
     }
 }

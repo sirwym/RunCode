@@ -199,12 +199,14 @@ function App() {
     const name = activeTab?.fileName ?? "";
     const title = name ? `${name} — ${t("app.windowSuffix")}` : t("app.windowSuffix");
     void getCurrentWindow().setTitle(title);
-  }, [activeTab, t]);
+  }, [activeTab?.fileName, t]);
 
   // 切换 active tab 时，切换 Monaco model + 关联测试套件
   // Fix P1-3：依赖改为 [activeId]，避免每次输入触发；从 getState 读 tab 信息；防并发 + 串台校验
   useEffect(() => {
     if (!activeId) return;
+    // 同步当前 tab id 到 run manager，切换展示的运行结果快照（per-tab 隔离）
+    useRunManager.getState().setActiveTab(activeId);
     const tab = useTabs.getState().tabs.find((t) => t.id === activeId);
     if (!tab) return;
     editorRef.current?.switchModel(tab.id, tab.content, tab.language);

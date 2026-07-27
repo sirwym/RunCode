@@ -14,16 +14,40 @@ pub struct PtySession {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     /// 从 child clone 的独立 killer，供 stop_pty_run 使用（避免与 wait 竞争锁）
     killer: Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>,
+    /// 子进程 PID。Unix 上用于 kill(-pid) 杀整个进程组（portable_pty 后端 setsid
+    /// 创建新会话，子进程是组长，孙进程同组）；Windows 上保留 killer 行为。
+    #[cfg(unix)]
+    pid: Option<u32>,
     /// 持有临时编译目录，drop 时自动清理
     _work_dir: TempDir,
 }
 
 impl PtySession {
     /// 创建 PTY 会话（字段私有，通过构造函数初始化）
+    #[cfg(unix)]
     pub fn new(
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
         killer: Box<dyn ChildKiller + Send + Sync>,
+        pid: Option<u32>,
+        work_dir: TempDir,
+    ) -> Self {
+        Self {
+            master: Arc::new(Mutex::new(master)),
+            writer: Arc::new(Mutex::new(writer)),
+            killer: Mutex::new(Some(killer)),
+            pid,
+            _work_dir: work_dir,
+        }
+    }
+
+    /// 创建 PTY 会话（Windows 版：ConPTY 后端已提供基本进程隔离，保留 killer 行为）
+    #[cfg(windows)]
+    pub fn new(
+        master: Box<dyn MasterPty + Send>,
+        writer: Box<dyn Write + Send>,
+        killer: Box<dyn ChildKiller + Send + Sync>,
+        _pid: Option<u32>,
         work_dir: TempDir,
     ) -> Self {
         Self {
@@ -52,6 +76,21 @@ impl PtySession {
     }
 
     pub fn kill(&self) {
+        // Unix：优先用 kill(-pid, SIGKILL) 杀整个进程组（含孙进程）。
+        // portable_pty 后端 setsid() 让子进程成为会话组长，PGID == PID，
+        // 因此 kill(-pid) 能杀掉同组的所有进程（学生程序 fork/system 产生的孙进程）。
+        // killer.kill() 退化为兜底：pid 不可用或 kill 失败时再用。
+        #[cfg(unix)]
+        {
+            if let Some(pid) = self.pid {
+                let pgid = pid as i32;
+                let result = unsafe { libc::kill(-pgid, libc::SIGKILL) };
+                if result == 0 {
+                    return;
+                }
+                // kill 失败（进程已退出或权限不足），回退到 killer
+            }
+        }
         if let Ok(mut killer) = self.killer.lock() {
             if let Some(mut k) = killer.take() {
                 let _ = k.kill();
@@ -106,10 +145,139 @@ impl PtyManager {
             }
         }
     }
+
+    /// 杀掉所有 PTY 会话的子进程（应用退出时调用，防止残留）
+    pub fn kill_all(&self) {
+        if let Ok(sessions) = self.sessions.lock() {
+            for session in sessions.values() {
+                session.kill();
+            }
+        }
+    }
 }
 
 impl Default for PtyManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+    use std::time::{Duration, Instant};
+
+    /// 构造一个真实的 PtySession，spawn 一个长时间运行的子进程（sleep 30）。
+    /// 用于测试 kill / kill_all 是否能正确杀掉子进程。
+    fn spawn_sleep_session(label: &str) -> (PtySession, Box<dyn portable_pty::Child + Send>) {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty failed");
+
+        let mut cmd = CommandBuilder::new("sleep");
+        cmd.arg("30");
+        let child = pair.slave.spawn_command(cmd).expect("spawn failed");
+        let pid = child.process_id();
+        drop(pair.slave);
+
+        let _reader = pair
+            .master
+            .try_clone_reader()
+            .expect("try_clone_reader failed");
+        let writer = pair.master.take_writer().expect("take_writer failed");
+        let killer = child.clone_killer();
+        let work_dir = TempDir::new().expect("TempDir failed");
+
+        let _ = label; // 仅用于调试识别
+        let session = PtySession::new(pair.master, writer, killer, pid, work_dir);
+        (session, child)
+    }
+
+    /// 等待 child 退出，最多等 timeout。返回 true 表示已退出。
+    fn wait_child_exit(child: &mut Box<dyn portable_pty::Child + Send>, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            // try_wait 非阻塞：Some(status) 表示已退出，None 表示仍在运行
+            match child.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => return true, // wait 出错视为已退出
+            }
+        }
+    }
+
+    #[test]
+    fn kill_all_terminates_all_sessions() {
+        let manager = PtyManager::new();
+        let (session1, mut child1) = spawn_sleep_session("s1");
+        let (session2, mut child2) = spawn_sleep_session("s2");
+        manager.insert("run-1", session1);
+        manager.insert("run-2", session2);
+
+        manager.kill_all();
+
+        // 两个子进程都应该在 2 秒内退出
+        assert!(
+            wait_child_exit(&mut child1, Duration::from_secs(2)),
+            "child1 未在 2s 内退出"
+        );
+        assert!(
+            wait_child_exit(&mut child2, Duration::from_secs(2)),
+            "child2 未在 2s 内退出"
+        );
+
+        // kill_all 不移除 session（与 cancel_all 行为一致），map 中仍有 2 个
+        let count = manager
+            .sessions
+            .lock()
+            .map(|s| s.len())
+            .unwrap_or(0);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn kill_all_on_empty_manager_is_noop() {
+        let manager = PtyManager::new();
+        // 不应 panic
+        manager.kill_all();
+    }
+
+    #[test]
+    fn kill_single_session_leaves_others_running() {
+        let manager = PtyManager::new();
+        let (session1, mut child1) = spawn_sleep_session("keep");
+        let (session2, mut child2) = spawn_sleep_session("kill");
+        manager.insert("keep", session1);
+        manager.insert("kill", session2);
+
+        manager.kill("kill");
+
+        // 只有 kill 这一个会话的子进程被杀掉
+        assert!(
+            wait_child_exit(&mut child2, Duration::from_secs(2)),
+            "killed child 未在 2s 内退出"
+        );
+        // keep 仍在运行：等待 200ms 确认它没有立即退出
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !wait_child_exit(&mut child1, Duration::from_millis(50)),
+            "keep child 不应被杀"
+        );
+
+        // 清理：杀掉剩下的 keep 会话，避免子进程残留
+        manager.kill("keep");
+        let _ = wait_child_exit(&mut child1, Duration::from_secs(2));
     }
 }

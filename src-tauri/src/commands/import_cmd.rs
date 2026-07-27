@@ -27,31 +27,38 @@ pub async fn import_test_cases(
 ) -> Result<ImportResult, AppError> {
     let base = base_dir(&app)?;
     let strict = strict.unwrap_or(false);
-    let source_path = Path::new(&source);
+    let source_path = Path::new(&source).to_path_buf();
 
-    if !source_path.exists() {
-        return Err(AppError::Other {
-            detail: "路径不存在".into(),
-        });
-    }
+    // spawn_blocking：导入涉及同步文件 IO + ZIP 解压，避免阻塞 tokio runtime
+    tokio::task::spawn_blocking(move || {
+        if !source_path.exists() {
+            return Err(AppError::Other {
+                detail: "路径不存在".into(),
+            });
+        }
 
-    if source_path.is_dir() {
-        importer::import_from_directory(&base, &suite_id, source_path, strict)
-    } else if source_path.is_file() {
-        let ext = source_path
-            .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-        if ext == "zip" {
-            importer::import_from_zip(&base, &suite_id, source_path, strict)
+        if source_path.is_dir() {
+            importer::import_from_directory(&base, &suite_id, &source_path, strict)
+        } else if source_path.is_file() {
+            let ext = source_path
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            if ext == "zip" {
+                importer::import_from_zip(&base, &suite_id, &source_path, strict)
+            } else {
+                Err(AppError::Other {
+                    detail: "不支持的文件格式，仅支持 .zip 文件".into(),
+                })
+            }
         } else {
             Err(AppError::Other {
-                detail: "不支持的文件格式，仅支持 .zip 文件".into(),
+                detail: "不支持的路径类型".into(),
             })
         }
-    } else {
-        Err(AppError::Other {
-            detail: "不支持的路径类型".into(),
-        })
-    }
+    })
+    .await
+    .map_err(|e| AppError::Other {
+        detail: format!("导入任务失败: {e}"),
+    })?
 }

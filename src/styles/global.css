@@ -915,14 +915,212 @@ body {
   background-color: rgba(250, 250, 250, 0.05);
 }
 
-/* ============== diff 区域 ============== */
-.testcase-diff {
+/* ============== 3 列布局：实际列只读 ============== */
+.testcase-fields-3 {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.testcase-field .field-readonly {
+  flex: 1 1 auto;
+  min-height: 60px;
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-xs) var(--space-md) var(--space-sm);
+  border: none;
+  background-color: transparent;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.testcase-field .field-readonly.field-actual {
+  background-color: rgba(239, 68, 68, 0.04);
+}
+
+.testcase-field .field-actual-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-family: var(--font-ui);
+}
+
+.testcase-field .field-truncated {
+  display: inline-block;
+  margin-top: var(--space-xs);
+  padding: 1px var(--space-xs);
+  font-size: 10px;
+  color: var(--text-muted);
+  background-color: var(--bg);
+}
+
+/* ============== diff 触发区（卡片底部按钮） ============== */
+.testcase-diff-trigger {
   padding: var(--space-sm) var(--space-md);
   border-top: 1px solid var(--border);
   background-color: rgba(0, 0, 0, 0.1);
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.testcase-diff-trigger .diff-first-pos {
+  font-size: 11px;
+  color: var(--warning);
+}
+
+.testcase-stderr-details {
+  width: 100%;
+  margin-top: var(--space-sm);
+}
+
+.testcase-stderr-details summary {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--warning);
+  cursor: pointer;
+  padding: var(--space-xs) 0;
+}
+
+/* ============== diff Modal ============== */
+.diff-dialog-content {
+  width: 1000px;
+  height: 700px;
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.diff-dialog-content > * + * {
+  margin-top: 0;
+}
+
+.diff-dialog-count {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: normal;
+  margin-left: var(--space-xs);
+}
+
+.diff-dialog-hint {
+  padding: var(--space-xs) var(--space-md);
+  font-size: 11px;
+  color: var(--text-muted);
+  background-color: var(--panel-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-dialog-loading,
+.diff-dialog-error {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.diff-dialog-error {
+  color: var(--error);
+}
+
+.diff-dialog-body {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background-color: var(--border);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.diff-column {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--panel-bg-alt);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.diff-column-header {
+  padding: var(--space-xs) var(--space-md);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--panel-bg);
+}
+
+.diff-column-header.actual { color: var(--error); }
+.diff-column-header.expected { color: var(--success); }
+
+.diff-column-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-line {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  min-height: 18px;
+}
+
+.diff-line-no {
+  padding: 0 var(--space-xs);
+  text-align: right;
+  color: var(--text-muted);
+  background-color: var(--bg);
+  user-select: none;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.diff-line-content {
+  padding: 0 var(--space-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-line.modified,
+.diff-line.removed,
+.diff-line.added {
+  background-color: rgba(239, 68, 68, 0.12);
+}
+
+.diff-line.empty-side .diff-line-content {
+  color: var(--text-muted);
+  opacity: 0.4;
+}
+
+.diff-empty-hint {
+  padding: var(--space-md);
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 12px;
+}
+
+.diff-dialog-footer {
+  padding: var(--space-xs) var(--space-md);
+  font-size: 11px;
+  color: var(--warning);
+  border-top: 1px solid var(--border);
+  background-color: var(--panel-bg);
 }
 
 .diff-row {

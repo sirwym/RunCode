@@ -18,7 +18,7 @@ echo "=== 构建 Tauri（ad-hoc 签名）==="
 pnpm tauri build
 
 echo "=== 构建完成 ==="
-APP_PATH="src-tauri/target/release/bundle/macos/CppTeach.app"
+APP_PATH="src-tauri/target/release/bundle/macos/RunCode.app"
 DMG_DIR="src-tauri/target/release/bundle/dmg"
 
 if [ -d "$APP_PATH" ]; then
@@ -30,7 +30,7 @@ fi
 if [ ! -d "$DMG_DIR" ]; then
   echo ""
   echo "⚠ DMG 未自动生成（可能因沙箱限制），手动执行："
-  echo "  hdiutil create -volname CppTeach -srcfolder '$APP_PATH' -ov -format UDZO '$(dirname $DMG_DIR)/CppTeach_0.1.0_aarch64.dmg'"
+  echo "  hdiutil create -volname RunCode -srcfolder '$APP_PATH' -ov -format UDZO '$(dirname $DMG_DIR)/RunCode_0.1.0_aarch64.dmg'"
 fi
 
 echo ""

@@ -2,7 +2,7 @@
 name = "cppteach"
 version = "0.1.0"
 description = "RunCode IDE"
-authors = ["you"]
+authors = ["YuanMing"]
 edition = "2021"
 
 [lib]
@@ -24,7 +24,7 @@ which = "6"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "1"
 libc = "0.2"
-zip = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 walkdir = "2"
 tree-sitter = "0.22"
 tree-sitter-cpp = "0.22"

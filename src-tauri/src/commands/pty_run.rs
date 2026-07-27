@@ -5,6 +5,7 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 
 use crate::commands::compile_run::{compile_only, load_config};
 use crate::error::AppError;
@@ -84,8 +85,25 @@ pub async fn start_pty_run(
         .register(RunKind::Interactive)
         .map_err(|e| AppError::Other { detail: e })?;
 
+    // 2. 执行内部逻辑。任何 Err 都在外层调 complete，避免 RunManager 永久忙碌。
+    //    Success 分支的 complete 由等待线程负责；CompileFailed 分支的 complete
+    //    由 inner 内部负责（保留原有逻辑）。
+    let result = start_pty_run_inner(code, run_id.clone(), cancel_rx, &app, &pty_manager).await;
+    if result.is_err() {
+        run_manager.complete(&run_id);
+    }
+    result
+}
+
+async fn start_pty_run_inner(
+    code: String,
+    run_id: String,
+    cancel_rx: oneshot::Receiver<()>,
+    app: &AppHandle,
+    pty_manager: &State<'_, PtyManager>,
+) -> Result<StartPtyResult, AppError> {
     // 2. 编译
-    let (_settings, config, limits) = load_config(&app)?;
+    let (_settings, config, limits) = load_config(app)?;
     let work_dir = TempDir::new()?;
 
     let exe_path = match compile_only(&code, &config, work_dir.path(), limits, Some(cancel_rx)).await? {
@@ -95,7 +113,9 @@ pub async fn start_pty_run(
         } => {
             // 编译失败：不 emit pty_exit，直接返回结构化结果。
             // 前端 invoke 返回后即可拿到 stderr，无事件时序竞态。
-            run_manager.complete(&run_id);
+            if let Some(rm) = app.try_state::<RunManager>() {
+                rm.complete(&run_id);
+            }
             return Ok(StartPtyResult::CompileFailed { run_id, stderr });
         }
     };
@@ -119,6 +139,8 @@ pub async fn start_pty_run(
     let child = pair.slave.spawn_command(cmd).map_err(|e| AppError::Other {
         detail: e.to_string(),
     })?;
+    // 取子进程 PID，用于 Unix 上 kill(-pid) 杀整个进程组（含孙进程）
+    let pid = child.process_id();
     drop(pair.slave); // 释放 slave，master 持有唯一读端
 
     // 5. clone reader / take writer / clone killer
@@ -134,7 +156,7 @@ pub async fn start_pty_run(
     let killer = child.clone_killer(); // clone_killer 直接返回，不是 Result
 
     // 6. 存入 PtyManager
-    let session = PtySession::new(pair.master, writer, killer, work_dir);
+    let session = PtySession::new(pair.master, writer, killer, pid, work_dir);
     pty_manager.insert(&run_id, session);
 
     // 7. 读取线程：blocking read → emit pty_output

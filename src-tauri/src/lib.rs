@@ -17,16 +17,16 @@ mod test_suite;
 
 use commands::{
     add_recent_file, add_test_case, clear_recent_files, compile_and_run, create_test_suite,
-    delete_test_suite, find_or_create_suite_by_doc_path, format_code, get_all_case_previews,
-    get_case_preview, get_recent_files, get_settings, import_test_cases, load_test_suite,
-    open_file, remove_recent_file, remove_test_case, resize_pty, run_tests, save_file,
-    save_settings, start_pty_run, stop_pty_run, stop_run, update_test_case,
-    update_view_menu_state, write_pty_stdin,
+    delete_test_suite, extract_code_symbols, find_or_create_suite_by_doc_path, format_code,
+    get_all_case_previews, get_case_full_expected, get_case_preview, get_recent_files,
+    get_settings, import_test_cases, load_test_suite, open_file, remove_recent_file,
+    remove_test_case, resize_pty, run_tests, save_file, save_settings, start_pty_run,
+    stop_pty_run, stop_run, update_test_case, update_view_menu_state, write_pty_stdin,
 };
 use pty::PtyManager;
 use run_manager::RunManager;
 use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -51,6 +51,7 @@ pub fn run() {
             remove_test_case,
             get_case_preview,
             get_all_case_previews,
+            get_case_full_expected,
             delete_test_suite,
             find_or_create_suite_by_doc_path,
             import_test_cases,
@@ -62,6 +63,7 @@ pub fn run() {
             clear_recent_files,
             format_code,
             update_view_menu_state,
+            extract_code_symbols,
         ])
         .setup(|app| {
             // 应用菜单（RunCode）
@@ -72,6 +74,9 @@ pub fn run() {
                 Some(AboutMetadata {
                     version: Some("0.1.0".into()),
                     authors: Some(vec!["YuanMing".into()]),
+                    website: Some("https://github.com/YuanMing/RunCode".into()),
+                    copyright: Some("© 2026 YuanMing".into()),
+                    license: Some("MIT".into()),
                     ..Default::default()
                 }),
             )?;
@@ -218,6 +223,9 @@ pub fn run() {
                         Some(AboutMetadata {
                             version: Some("0.1.0".into()),
                             authors: Some(vec!["YuanMing".into()]),
+                            website: Some("https://github.com/YuanMing/RunCode".into()),
+                            copyright: Some("© 2026 YuanMing".into()),
+                            license: Some("MIT".into()),
                             ..Default::default()
                         }),
                     )?,
@@ -307,8 +315,19 @@ pub fn run() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // 应用退出时清理所有 PTY 子进程和运行会话，防止残留
+            if let tauri::RunEvent::Exit = event {
+                if let Some(pm) = app_handle.try_state::<PtyManager>() {
+                    pm.kill_all();
+                }
+                if let Some(rm) = app_handle.try_state::<RunManager>() {
+                    rm.cancel_all();
+                }
+            }
+        });
 }
 
 /// 更新布局菜单项的文本前缀（✓ / 空格）

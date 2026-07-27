@@ -196,11 +196,25 @@ function Terminal({ runId, onExit, fontSize, theme, compileError, onFocusChange,
     let unlistenExit: UnlistenFn | null = null;
 
     const setup = async () => {
+      // 输出节流：用 rAF 批量 write，避免死循环刷屏程序淹没事件循环
+      let buffer = "";
+      let rafId: number | null = null;
+      const flush = () => {
+        rafId = null;
+        if (buffer) {
+          term.write(buffer);
+          buffer = "";
+        }
+      };
+
       unlistenOutput = await listen<{ run_id: string; data: string }>(
         "pty_output",
         (e) => {
           if (e.payload.run_id === runId) {
-            term.write(e.payload.data);
+            buffer += e.payload.data;
+            if (rafId === null) {
+              rafId = requestAnimationFrame(flush);
+            }
           }
         },
       );
@@ -211,6 +225,15 @@ function Terminal({ runId, onExit, fontSize, theme, compileError, onFocusChange,
         killed_by: string | null;
       }>("pty_exit", (e) => {
         if (e.payload.run_id === runId) {
+          // 退出前冲刷残留缓冲
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          if (buffer) {
+            term.write(buffer);
+            buffer = "";
+          }
           term.write("\x1b[?25h");
           onExitRef.current(e.payload.exit_code, e.payload.killed_by);
         }

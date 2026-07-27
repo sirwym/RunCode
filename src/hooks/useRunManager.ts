@@ -23,6 +23,18 @@ function localizeError(e: unknown): string {
   return typeof e === "string" ? e : String(e);
 }
 
+// 单个 tab 的运行结果快照（per-tab 隔离）
+interface TabResults {
+  runResult: RunResult | null;
+  testResult: TestRunResult | null;
+  ptyExitInfo: PtyExitInfo | null;
+  compileError: string | null;
+}
+
+function emptyTabResults(): TabResults {
+  return { runResult: null, testResult: null, ptyExitInfo: null, compileError: null };
+}
+
 interface RunManagerState {
   // 统一状态
   activeRunId: string | null;
@@ -44,6 +56,12 @@ interface RunManagerState {
   // 编译失败时的 stderr（PTY 交互模式下，编译失败不创建 PTY 会话，
   // 直接把 stderr 存这里供 Terminal 显示 + Editor 解析错误行）
   compileError: string | null;
+
+  // per-tab 结果快照（按 tab id 索引）
+  activeTabId: string | null;
+  resultsByTab: Record<string, TabResults>;
+  setActiveTab: (tabId: string | null) => void;
+  clearTab: (tabId: string) => void;
 
   // 操作
   compileRun: (code: string, stdin?: string) => Promise<void>;
@@ -71,32 +89,87 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   ptyRunId: null,
   ptyExitInfo: null,
   compileError: null,
+  activeTabId: null,
+  resultsByTab: {},
+
+  setActiveTab: (tabId) => {
+    const snapshot = tabId ? (get().resultsByTab[tabId] ?? emptyTabResults()) : emptyTabResults();
+    set({
+      activeTabId: tabId,
+      runResult: snapshot.runResult,
+      testResult: snapshot.testResult,
+      ptyExitInfo: snapshot.ptyExitInfo,
+      compileError: snapshot.compileError,
+      // testProgress 是瞬时的，切换 tab 时清空
+      testProgress: null,
+    });
+  },
+
+  clearTab: (tabId) => {
+    set((s) => {
+      const next = { ...s.resultsByTab };
+      delete next[tabId];
+      return { resultsByTab: next };
+    });
+  },
 
   compileRun: async (code, stdin) => {
     if (get().activeRunId) return;
+    const initiatorTabId = get().activeTabId;
     set({ status: "running", error: null, kind: "compile_run", testResult: null });
     try {
       const result = await invoke<RunResult>("compile_and_run", { code, stdin });
-      set({
-        activeRunId: null,
-        status: result.success ? "done" : "error",
-        runResult: result,
-        kind: null,
-        error: null,
+      set((s) => {
+        const isStillActive = s.activeTabId === initiatorTabId;
+        const resultsByTab = initiatorTabId
+          ? {
+              ...s.resultsByTab,
+              [initiatorTabId]: {
+                runResult: result,
+                testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
+                ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
+                compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+              },
+            }
+          : s.resultsByTab;
+        return {
+          activeRunId: null,
+          status: result.success ? "done" : "error",
+          runResult: isStillActive ? result : s.runResult,
+          kind: null,
+          error: null,
+          resultsByTab,
+        };
       });
     } catch (e) {
-      set({
-        activeRunId: null,
-        status: "error",
-        runResult: null,
-        kind: null,
-        error: localizeError(e),
+      set((s) => {
+        const isStillActive = s.activeTabId === initiatorTabId;
+        const resultsByTab = initiatorTabId
+          ? {
+              ...s.resultsByTab,
+              [initiatorTabId]: {
+                runResult: null,
+                testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
+                ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
+                compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+              },
+            }
+          : s.resultsByTab;
+        return {
+          activeRunId: null,
+          status: "error",
+          runResult: isStillActive ? null : s.runResult,
+          kind: null,
+          error: localizeError(e),
+          resultsByTab,
+        };
       });
     }
   },
 
   runTests: async (code, suiteId, strict) => {
     if (get().activeRunId) return;
+    const initiatorTabId = get().activeTabId;
     set({
       status: "running",
       error: null,
@@ -118,20 +191,50 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
 
     try {
       const result = await invoke<TestRunResult>("run_tests", { code, suiteId, strict });
-      set({
-        activeRunId: null,
-        status: result.success ? "done" : "error",
-        testResult: result,
-        kind: null,
-        error: null,
+      set((s) => {
+        const isStillActive = s.activeTabId === initiatorTabId;
+        const resultsByTab = initiatorTabId
+          ? {
+              ...s.resultsByTab,
+              [initiatorTabId]: {
+                runResult: s.resultsByTab[initiatorTabId]?.runResult ?? null,
+                testResult: result,
+                ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
+                compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+              },
+            }
+          : s.resultsByTab;
+        return {
+          activeRunId: null,
+          status: result.success ? "done" : "error",
+          testResult: isStillActive ? result : s.testResult,
+          kind: null,
+          error: null,
+          resultsByTab,
+        };
       });
     } catch (e) {
-      set({
-        activeRunId: null,
-        status: "error",
-        testResult: null,
-        kind: null,
-        error: localizeError(e),
+      set((s) => {
+        const isStillActive = s.activeTabId === initiatorTabId;
+        const resultsByTab = initiatorTabId
+          ? {
+              ...s.resultsByTab,
+              [initiatorTabId]: {
+                runResult: s.resultsByTab[initiatorTabId]?.runResult ?? null,
+                testResult: null,
+                ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
+                compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+              },
+            }
+          : s.resultsByTab;
+        return {
+          activeRunId: null,
+          status: "error",
+          testResult: isStillActive ? null : s.testResult,
+          kind: null,
+          error: localizeError(e),
+          resultsByTab,
+        };
       });
     } finally {
       if (unlisten) unlisten();
@@ -140,6 +243,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
 
   startInteractive: async (code) => {
     if (get().activeRunId) return;
+    const initiatorTabId = get().activeTabId;
     set({
       status: "running",
       error: null,
@@ -155,12 +259,27 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
         set({ activeRunId: result.run_id, ptyRunId: result.run_id });
       } else {
         // 编译失败：后端返回 CompileFailed，不创建 PTY 会话
-        set({
-          activeRunId: null,
-          status: "error",
-          ptyRunId: null,
-          kind: null,
-          compileError: result.stderr,
+        set((s) => {
+          const isStillActive = s.activeTabId === initiatorTabId;
+          const resultsByTab = initiatorTabId
+            ? {
+                ...s.resultsByTab,
+                [initiatorTabId]: {
+                  runResult: s.resultsByTab[initiatorTabId]?.runResult ?? null,
+                  testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
+                  ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
+                  compileError: result.stderr,
+                },
+              }
+            : s.resultsByTab;
+          return {
+            activeRunId: null,
+            status: "error",
+            ptyRunId: null,
+            kind: null,
+            compileError: isStillActive ? result.stderr : s.compileError,
+            resultsByTab,
+          };
         });
       }
     } catch (e) {
@@ -182,22 +301,53 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
     } catch {
       // 忽略
     }
-    set({
-      activeRunId: null,
-      ptyRunId: null,
-      status: "idle",
-      kind: null,
-      ptyExitInfo: { exitCode: null, killedBy: "cancelled" },
+    const exitInfo: PtyExitInfo = { exitCode: null, killedBy: "cancelled" };
+    set((s) => {
+      const initiatorTabId = s.activeTabId;
+      const resultsByTab = initiatorTabId
+        ? {
+            ...s.resultsByTab,
+            [initiatorTabId]: {
+              runResult: s.resultsByTab[initiatorTabId]?.runResult ?? null,
+              testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
+              ptyExitInfo: exitInfo,
+              compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+            },
+          }
+        : s.resultsByTab;
+      return {
+        activeRunId: null,
+        ptyRunId: null,
+        status: "idle",
+        kind: null,
+        ptyExitInfo: exitInfo,
+        resultsByTab,
+      };
     });
   },
 
   onPtyExit: (info) => {
-    set({
-      activeRunId: null,
-      ptyRunId: null,
-      status: "idle",
-      kind: null,
-      ptyExitInfo: info,
+    set((s) => {
+      const initiatorTabId = s.activeTabId;
+      const resultsByTab = initiatorTabId
+        ? {
+            ...s.resultsByTab,
+            [initiatorTabId]: {
+              runResult: s.resultsByTab[initiatorTabId]?.runResult ?? null,
+              testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
+              ptyExitInfo: info,
+              compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+            },
+          }
+        : s.resultsByTab;
+      return {
+        activeRunId: null,
+        ptyRunId: null,
+        status: "idle",
+        kind: null,
+        ptyExitInfo: info,
+        resultsByTab,
+      };
     });
   },
 

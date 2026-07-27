@@ -6,9 +6,18 @@ import {
   useRef,
 } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
-import type { editor as MonacoEditorNS } from "monaco-editor";
+import type { editor as MonacoEditorNS, languages as MonacoLanguagesNS } from "monaco-editor";
+import { invoke } from "@tauri-apps/api/core";
 import type { EditorSettings, CompileError } from "../types";
 import { useTabs } from "../hooks/useTabs";
+import { CPP_SNIPPETS } from "../monaco/cppSnippets";
+
+// 后端返回的符号结构
+interface CodeSymbol {
+  name: string;
+  kind: string; // "function" / "variable" / "struct" / "macro"
+  line: number;
+}
 
 // 暴露给父组件的命令接口
 export interface EditorHandle {
@@ -41,6 +50,8 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const modelsRef = useRef<Map<string, MonacoEditorNS.ITextModel>>(new Map());
   const activeTabIdRef = useRef<string | null>(null);
+  // L1+L2 补全 provider 的 disposable，组件卸载时清理
+  const completionDisposablesRef = useRef<Array<{ dispose: () => void }>>([]);
   // 编译错误装饰 ID（deltaDecorations 增量更新）
   const decorationsRef = useRef<string[]>([]);
   // 用 ref 持有最新 onContentChange，避免 model.onDidChangeContent 闭包陈旧
@@ -163,6 +174,67 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
         activeTabIdRef.current = tab.id;
       }
     }
+
+    // 代码补全 L1：OI 竞赛 snippet
+    const snippetDisposable = monaco.languages.registerCompletionItemProvider("cpp", {
+      provideCompletionItems: (model, position) => {
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn,
+        };
+        return {
+          suggestions: CPP_SNIPPETS.map((s) => ({
+            label: s.label,
+            kind: monaco.languages.CompletionItemKind.Snippet,
+            insertText: s.insertText,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            detail: s.detail,
+            range,
+          })),
+        };
+      },
+    });
+    completionDisposablesRef.current.push(snippetDisposable);
+
+    // 代码补全 L2：当前文件符号（函数/全局变量/struct/宏）
+    const symbolDisposable = monaco.languages.registerCompletionItemProvider("cpp", {
+      triggerCharacters: ["."],
+      provideCompletionItems: async (model, position) => {
+        const code = model.getValue();
+        let symbols: CodeSymbol[] = [];
+        try {
+          symbols = await invoke<CodeSymbol[]>("extract_code_symbols", { code });
+        } catch {
+          return { suggestions: [] };
+        }
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn,
+        };
+        const kindMap: Record<string, MonacoLanguagesNS.CompletionItemKind> = {
+          function: monaco.languages.CompletionItemKind.Function,
+          variable: monaco.languages.CompletionItemKind.Variable,
+          struct: monaco.languages.CompletionItemKind.Struct,
+          macro: monaco.languages.CompletionItemKind.Constant,
+        };
+        return {
+          suggestions: symbols.map((s) => ({
+            label: s.name,
+            kind: kindMap[s.kind] ?? monaco.languages.CompletionItemKind.Text,
+            insertText: s.name,
+            detail: `${s.kind} (line ${s.line})`,
+            range,
+          })),
+        };
+      },
+    });
+    completionDisposablesRef.current.push(symbolDisposable);
   }, [onRun]);
 
   // 计算 Monaco 主题：editor.theme 优先，否则用软件 effectiveTheme 推断
@@ -209,6 +281,20 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
     if (!monaco) return;
     monaco.editor.setTheme(monacoTheme);
   }, [monacoTheme]);
+
+  // 组件卸载时清理补全 provider
+  useEffect(() => {
+    return () => {
+      for (const d of completionDisposablesRef.current) {
+        try {
+          d.dispose();
+        } catch {
+          // 忽略
+        }
+      }
+      completionDisposablesRef.current = [];
+    };
+  }, []);
 
   return (
     <Editor

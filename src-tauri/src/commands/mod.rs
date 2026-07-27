@@ -3,6 +3,7 @@ pub mod documents;
 pub mod format_cmd;
 pub mod import_cmd;
 pub mod menu_cmd;
+pub mod parser_cmd;
 pub mod pty_run;
 pub mod recent_cmd;
 pub mod settings_cmd;
@@ -27,11 +28,13 @@ pub use documents::{open_file, save_file};
 pub use format_cmd::format_code;
 pub use import_cmd::import_test_cases;
 pub use menu_cmd::update_view_menu_state;
+pub use parser_cmd::extract_code_symbols;
 pub use pty_run::{resize_pty, start_pty_run, stop_pty_run, write_pty_stdin};
 pub use recent_cmd::{add_recent_file, clear_recent_files, get_recent_files, remove_recent_file};
 pub use settings_cmd::{get_settings, save_settings};
 pub use test_runner::run_tests;
 pub use test_suite_cmd::{
     add_test_case, create_test_suite, delete_test_suite, find_or_create_suite_by_doc_path,
-    get_all_case_previews, get_case_preview, load_test_suite, remove_test_case, update_test_case,
+    get_all_case_previews, get_case_full_expected, get_case_preview, load_test_suite,
+    remove_test_case, update_test_case,
 };
