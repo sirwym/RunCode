@@ -1,6 +1,6 @@
 [package]
 name = "cppteach"
-version = "0.1.0"
+version = "0.1.1"
 description = "RunCode IDE"
 authors = ["YuanMing"]
 edition = "2021"

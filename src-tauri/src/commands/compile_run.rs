@@ -107,7 +107,8 @@ pub fn load_config(app: &AppHandle) -> Result<(AppSettings, CompilerConfig, Reso
             detail: format!("获取数据目录失败: {e}"),
         })?;
     let s = settings::load(&base);
-    let config = CompilerConfig::from_settings(&s)?;
+    let resource_dir = app.path().resource_dir().ok();
+    let config = CompilerConfig::from_settings(&s, resource_dir.as_deref())?;
     let run_limits = ResourceLimits::from_settings(&s.runtime, &s.test);
     // 编译阶段用相同的 limits（CPU + fsize）
     Ok((s, config, run_limits))
@@ -205,7 +206,7 @@ mod tests {
 
     fn test_config() -> (CompilerConfig, ResourceLimits) {
         let s = AppSettings::default();
-        let config = CompilerConfig::from_settings(&s).unwrap();
+        let config = CompilerConfig::from_settings(&s, None).unwrap();
         let limits = ResourceLimits::from_settings(&s.runtime, &s.test);
         (config, limits)
     }

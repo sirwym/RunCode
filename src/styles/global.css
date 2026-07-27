@@ -1040,6 +1040,12 @@ body {
   margin-top: 0;
 }
 
+/* 标题区域需要自己的 padding（content 整体 padding:0） */
+.diff-dialog-content > :first-child {
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border);
+}
+
 .diff-dialog-count {
   font-size: 12px;
   color: var(--text-muted);
