@@ -20,7 +20,7 @@ function detectInitial(): Locale {
   } catch {
     // localStorage 不可用时回退
   }
-  return navigator.language.startsWith("zh") ? "zh" : "en";
+  return "zh";
 }
 
 // 按点分路径取文案，找不到时返回 key 本身（便于发现遗漏）

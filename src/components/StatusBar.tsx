@@ -44,8 +44,8 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
 
   // 缩进显示
   const indentText = settings?.editor.indent_style === "tab"
-    ? `Tab: ${settings.editor.indent_size}`
-    : `Spaces: ${settings?.editor.indent_size ?? 4}`;
+    ? t("status.indentTab", { n: settings.editor.indent_size })
+    : t("status.indentSpace", { n: settings?.editor.indent_size ?? 4 });
 
   // 编译参数
   const compilerText = settings?.compiler.compiler_path || "clang++";
@@ -106,7 +106,7 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
 
       {/* 右侧：光标位置 + 缩进 + 编译器 + 参数 */}
       <span className="status-item">
-        Ln {cursorLine}, Col {cursorColumn}
+        {t("status.cursorPos", { line: cursorLine, col: cursorColumn })}
       </span>
       <span className="status-item">{indentText}</span>
       <span className="status-item">

@@ -34,10 +34,13 @@ type Section = "general" | "editor" | "language" | "shortcuts";
 const CPP_STANDARDS = ["c++11", "c++14", "c++17", "c++20"];
 const OPT_LEVELS = ["O0", "O1", "O2", "O3"];
 const WARNING_LEVELS = [
-  { value: "none", label: "None" },
+  { value: "none", labelKey: "settings.warningsNone" },
   { value: "wall", label: "-Wall" },
   { value: "wall_extra", label: "-Wall -Wextra" },
 ];
+
+// 平台检测：Windows/Linux 下快捷键显示 Ctrl，macOS 下显示 Cmd
+const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
 // 快捷键只读展示数据（与 lib.rs 菜单定义对齐）
 export const SHORTCUTS: Array<{ category: "file" | "edit" | "find" | "view" | "app"; action: string; keys: string }> = [
@@ -111,6 +114,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setErrorMsg(null);
     try {
       await saveSettings(draft);
+      useI18n.getState().setLocale(draft.general.locale as Locale);
       setMsg(t("settings.saved"));
     } catch (e) {
       setErrorMsg(t("settings.saveFailed", { detail: String(e) }));
@@ -119,7 +123,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const handleClearRecent = async () => {
     await invoke("clear_recent_files").catch(() => {});
-    setMsg(t("recent.title") + " 已清空");
+    setMsg(t("recent.cleared", { title: t("recent.title") }));
   };
 
   return (
@@ -433,10 +437,10 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       <SelectContent>
                         <SelectItem value="cpp">C++</SelectItem>
                         <SelectItem value="python" disabled>
-                          Python（{t("settings.comingSoon")}）
+                          Python ({t("settings.comingSoon")})
                         </SelectItem>
                         <SelectItem value="java" disabled>
-                          Java（{t("settings.comingSoon")}）
+                          Java ({t("settings.comingSoon")})
                         </SelectItem>
                       </SelectContent>
                     </Select>
@@ -513,7 +517,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       <SelectContent>
                         {WARNING_LEVELS.map((w) => (
                           <SelectItem key={w.value} value={w.value}>
-                            {w.label}
+                            {w.labelKey ? t(w.labelKey) : w.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -669,7 +673,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         </div>
                         <div className="shortcut-cell">{t(s.action)}</div>
                         <div className="shortcut-cell shortcut-key">
-                          <kbd>{s.keys}</kbd>
+                          <kbd>{isMac ? s.keys : s.keys.replace(/\bCmd\b/g, "Ctrl")}</kbd>
                         </div>
                       </div>
                     ))}

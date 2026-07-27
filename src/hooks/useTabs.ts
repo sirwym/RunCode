@@ -131,7 +131,9 @@ export const useTabs = create<TabsState>((set, get) => ({
       : "";
     // Fix P2-4：未命名文件名从 i18n 读取
     const i18nState = useI18n.getState();
-    const fileName = language === "cpp" ? i18nState.t("app.untitled") : "未命名.py";
+    const fileName = language === "cpp"
+      ? i18nState.t("app.untitled")
+      : i18nState.t("app.untitledPython");
     const tab: Tab = {
       id,
       path: null,

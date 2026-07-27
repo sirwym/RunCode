@@ -201,8 +201,12 @@ describe("SettingsPanel 快捷键 tab 渲染", () => {
     const tableScope = within(table as HTMLElement);
 
     // 每个快捷键的 keys 都应在表格中（用 kbd 文本查找）
+    // jsdom 环境下 navigator.platform 非 Mac，渲染时会将 Cmd 转为 Ctrl
+    // 注意 Cmd+G 转换后与 Ctrl+G 撞重，需用 getAllByText
+    const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
     for (const s of SHORTCUTS) {
-      expect(tableScope.getByText(s.keys)).toBeInTheDocument();
+      const expected = isMac ? s.keys : s.keys.replace(/\bCmd\b/g, "Ctrl");
+      expect(tableScope.getAllByText(expected).length).toBeGreaterThan(0);
     }
   });
 

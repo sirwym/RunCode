@@ -4,6 +4,7 @@ export const en = {
     title: "RunCode",
     windowSuffix: "RunCode",
     untitled: "untitled.cpp",
+    untitledPython: "untitled.py",
   },
   toolbar: {
     stop: "Stop",
@@ -26,6 +27,9 @@ export const en = {
     memory: "Mem",
     exitCode: "exit",
     callFailed: "Call failed",
+    indentTab: "Tab: {n}",
+    indentSpace: "Spaces: {n}",
+    cursorPos: "Ln {line}, Col {col}",
   },
   killed: {
     timeout: "Timed out (killed)",
@@ -157,6 +161,7 @@ export const en = {
     shortcutFind: "Find",
     shortcutView: "View",
     shortcutApp: "App",
+    warningsNone: "None",
   },
   langConfig: {
     title: "Run Config",
@@ -210,6 +215,7 @@ export const en = {
     remove: "Remove from list",
     clear: "Clear List",
     openTime: "Last opened",
+    cleared: "{title} cleared",
   },
   tabs: {
     new: "New",

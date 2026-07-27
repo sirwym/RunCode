@@ -139,6 +139,14 @@ function App() {
     void loadSettings();
   }, [restoreTabs, loadSettings]);
 
+  // 同步 Rust settings 的 locale 到前端 i18n store
+  useEffect(() => {
+    const locale = settings?.general.locale;
+    if (locale === "zh" || locale === "en") {
+      useI18n.getState().setLocale(locale);
+    }
+  }, [settings?.general.locale]);
+
   // Fix P1-2：注册 dispose 回调，tab 删除成功后由 useTabs 通知清理 Monaco model
   useEffect(() => {
     useTabs.getState().setOnCloseTabs((ids) => {

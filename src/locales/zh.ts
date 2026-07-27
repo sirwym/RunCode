@@ -4,6 +4,7 @@ export const zh = {
     title: "RunCode",
     windowSuffix: "RunCode",
     untitled: "未命名.cpp",
+    untitledPython: "未命名.py",
   },
   toolbar: {
     stop: "停止",
@@ -26,6 +27,9 @@ export const zh = {
     memory: "内存",
     exitCode: "退出码",
     callFailed: "调用失败",
+    indentTab: "Tab: {n}",
+    indentSpace: "空格: {n}",
+    cursorPos: "行 {line}, 列 {col}",
   },
   killed: {
     timeout: "运行超时（已终止）",
@@ -157,6 +161,7 @@ export const zh = {
     shortcutFind: "查找",
     shortcutView: "视图",
     shortcutApp: "应用",
+    warningsNone: "无",
   },
   langConfig: {
     title: "运行配置",
@@ -210,6 +215,7 @@ export const zh = {
     remove: "从列表移除",
     clear: "清空列表",
     openTime: "上次打开",
+    cleared: "{title} 已清空",
   },
   tabs: {
     new: "新建",
