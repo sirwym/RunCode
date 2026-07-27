@@ -6,6 +6,14 @@
 
 RunCode 是一个轻量级跨平台 C++ 教学编辑器（macOS + Windows），基于 Tauri 2 + React 19 + Monaco Editor，专为 OI / 算法教学场景设计。支持多样例测试、时间限制判定、实时终端、代码格式化等教学核心功能。
 
+**性能与轻量化目标**（硬约束）：
+
+- 安装包体积保持在 ~10MB 级（macOS）/ ~15MB 级（Windows 含 TDM-GCC），不得显著膨胀
+- 运行内存 ~100MB 级，不得引入常驻后台进程
+- 启动时间秒级，不得引入启动期 IO 密集操作
+- 不引入 Electron / Chromium 内核依赖
+- 修改时优先考虑对体积/内存/启动时间的影响
+
 ## 技术栈
 
 **前端**：React 19 + TypeScript 5.8 + Vite 7 + Tailwind 4 + Zustand 4 + lucide-react 1.26 + Monaco Editor 0.52 + react-resizable-panels 2.1 + Radix UI + xterm 6

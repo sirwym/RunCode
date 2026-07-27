@@ -23,6 +23,17 @@
 - **主题切换** — Dark / Light / System 跟随系统
 - **可折叠面板** — 左右 / 上下分栏自由切换
 
+## 性能与轻量化
+
+基于 Tauri 2 + Rust，相比 Electron 方案显著轻量：
+
+- **安装包体积**：~10MB 级（macOS DMG）/ ~15MB 级（Windows NSIS，含内置 TDM-GCC）
+- **运行内存**：~100MB 级（对比 Electron 同类应用通常 300MB+）
+- **启动时间**：秒级（冷启动 <1s）
+- **无 Electron 包袱**：不打包 Chromium 内核，系统 webview 原生渲染
+
+适合教学场景对资源占用敏感的机房环境。
+
 ## 截图
 
 ![主界面](docs/images/main.png)

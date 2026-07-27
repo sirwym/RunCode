@@ -64,6 +64,8 @@ interface TerminalProps {
   // 编译失败时的 stderr（PTY 交互模式下编译失败不创建 PTY 会话，
   // 由父组件传入 stderr 直接显示）
   compileError?: string | null;
+  onFocusChange?: (focused: boolean) => void;
+  visible?: boolean;
 }
 
 // xterm.js 终端组件。
@@ -71,7 +73,7 @@ interface TerminalProps {
 // - 用户输入通过 onData → write_pty_stdin
 // - 容器大小变化通过 ResizeObserver → resize_pty
 // - fontSize 仅在初始化时读取，运行中改设置需重启应用生效
-function Terminal({ runId, onExit, fontSize, theme, compileError }: TerminalProps) {
+function Terminal({ runId, onExit, fontSize, theme, compileError, onFocusChange, visible = true }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -84,6 +86,9 @@ function Terminal({ runId, onExit, fontSize, theme, compileError }: TerminalProp
   // 保存最新的 theme，初始化时读取，后续通过 effect 运行时更新
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  // 保存最新的 onFocusChange，避免 effect 频繁重建
+  const onFocusChangeRef = useRef(onFocusChange);
+  onFocusChangeRef.current = onFocusChange;
 
   // 初始化终端（只执行一次）
   useEffect(() => {
@@ -94,6 +99,7 @@ function Terminal({ runId, onExit, fontSize, theme, compileError }: TerminalProp
         "'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', Menlo, 'Cascadia Code', monospace",
       fontSize: fontSizeRef.current ?? 13,
       cursorBlink: true,
+      cursorInactiveStyle: "block",
       convertEol: false,
       scrollback: 5000,
       theme: themeRef.current === "light" ? XTERM_LIGHT_THEME : XTERM_DARK_THEME,
@@ -102,9 +108,17 @@ function Terminal({ runId, onExit, fontSize, theme, compileError }: TerminalProp
     term.loadAddon(fit);
     term.open(containerRef.current);
     fit.fit();
+    term.blur();
 
     termRef.current = term;
     fitRef.current = fit;
+
+    // 上报焦点变化：xterm 6 移除了 onFocusChange API，改用 textarea DOM 事件
+    const textarea = containerRef.current.querySelector("textarea");
+    const handleFocus = () => onFocusChangeRef.current?.(true);
+    const handleBlur = () => onFocusChangeRef.current?.(false);
+    textarea?.addEventListener("focus", handleFocus);
+    textarea?.addEventListener("blur", handleBlur);
 
     // 容器大小变化时自动 fit + 通知后端 resize
     const ro = new ResizeObserver(() => {
@@ -119,6 +133,8 @@ function Terminal({ runId, onExit, fontSize, theme, compileError }: TerminalProp
 
     return () => {
       ro.disconnect();
+      textarea?.removeEventListener("focus", handleFocus);
+      textarea?.removeEventListener("blur", handleBlur);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -145,6 +161,18 @@ function Terminal({ runId, onExit, fontSize, theme, compileError }: TerminalProp
     if (!term) return;
     term.options.theme = theme === "light" ? XTERM_LIGHT_THEME : XTERM_DARK_THEME;
   }, [theme]);
+
+  // visible 变化时（从 display:none 切回显示）重新计算尺寸
+  useEffect(() => {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit || !visible) return;
+    try {
+      fit.fit();
+    } catch {
+      // 忽略
+    }
+  }, [visible]);
 
   // compileError 变化时显示编译错误（PTY 交互模式下编译失败不创建 PTY 会话，
   // 直接把 stderr 写入终端显示）
@@ -183,6 +211,7 @@ function Terminal({ runId, onExit, fontSize, theme, compileError }: TerminalProp
         killed_by: string | null;
       }>("pty_exit", (e) => {
         if (e.payload.run_id === runId) {
+          term.write("\x1b[?25h");
           onExitRef.current(e.payload.exit_code, e.payload.killed_by);
         }
       });

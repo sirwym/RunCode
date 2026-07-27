@@ -91,6 +91,9 @@ function App() {
   const panelCollapsedRef = useRef(false);
   panelCollapsedRef.current = panelCollapsed;
 
+  // 持有终端焦点状态，供字号缩放菜单事件分发使用
+  const terminalFocusedRef = useRef(false);
+
   // 布局方向 & 自动隐藏
   const layout = settings?.general.layout ?? "horizontal";
   const autoHide = settings?.general.auto_hide_panel ?? false;
@@ -284,21 +287,40 @@ function App() {
       );
       unlistens.push(
         await listen("menu-font-inc", () => {
-          const cur = useSettings.getState().settings?.editor.font_size ?? FONT_SIZE_DEFAULT;
-          const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
-          updateSettings({ editor: { ...useSettings.getState().settings!.editor, font_size: next } });
+          const s = useSettings.getState().settings!;
+          if (terminalFocusedRef.current) {
+            const cur = s.editor.terminal_font_size ?? FONT_SIZE_DEFAULT;
+            const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
+            updateSettings({ editor: { ...s.editor, terminal_font_size: next } });
+          } else {
+            const cur = s.editor.font_size ?? FONT_SIZE_DEFAULT;
+            const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
+            updateSettings({ editor: { ...s.editor, font_size: next } });
+          }
         }),
       );
       unlistens.push(
         await listen("menu-font-dec", () => {
-          const cur = useSettings.getState().settings?.editor.font_size ?? FONT_SIZE_DEFAULT;
-          const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
-          updateSettings({ editor: { ...useSettings.getState().settings!.editor, font_size: next } });
+          const s = useSettings.getState().settings!;
+          if (terminalFocusedRef.current) {
+            const cur = s.editor.terminal_font_size ?? FONT_SIZE_DEFAULT;
+            const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
+            updateSettings({ editor: { ...s.editor, terminal_font_size: next } });
+          } else {
+            const cur = s.editor.font_size ?? FONT_SIZE_DEFAULT;
+            const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
+            updateSettings({ editor: { ...s.editor, font_size: next } });
+          }
         }),
       );
       unlistens.push(
         await listen("menu-font-reset", () => {
-          updateSettings({ editor: { ...useSettings.getState().settings!.editor, font_size: FONT_SIZE_DEFAULT } });
+          const s = useSettings.getState().settings!;
+          if (terminalFocusedRef.current) {
+            updateSettings({ editor: { ...s.editor, terminal_font_size: FONT_SIZE_DEFAULT } });
+          } else {
+            updateSettings({ editor: { ...s.editor, font_size: FONT_SIZE_DEFAULT } });
+          }
         }),
       );
       unlistens.push(
@@ -503,16 +525,20 @@ function App() {
             </button>
           </div>
           <div className="panel-body">
-            {tab === "tests" && <TestCasesPanel onRunTests={handleRunTests} />}
-            {tab === "terminal" && (
+            <section style={{ display: tab === "tests" ? undefined : "none" }}>
+              <TestCasesPanel onRunTests={handleRunTests} />
+            </section>
+            <section style={{ display: tab === "terminal" ? undefined : "none" }}>
               <Terminal
                 runId={ptyRunId}
                 onExit={handlePtyExit}
                 fontSize={settings?.editor.terminal_font_size}
                 theme={effectiveTheme}
                 compileError={compileError}
+                onFocusChange={(focused) => { terminalFocusedRef.current = focused; }}
+                visible={tab === "terminal"}
               />
-            )}
+            </section>
           </div>
         </Panel>
       </PanelGroup>
