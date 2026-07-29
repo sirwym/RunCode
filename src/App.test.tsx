@@ -1,15 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act } from "@testing-library/react";
+import { render, act, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { ImperativePanelHandle } from "react-resizable-panels";
 
 // ============ Mock 配置（必须在 import App 之前） ============
 
 // 用 vi.hoisted 声明 spy，确保 vi.mock 工厂能安全引用
-const { collapseSpy, expandSpy, listenMock } = vi.hoisted(() => ({
+const { collapseSpy, expandSpy, listenMock, capturedMenuHandlers } = vi.hoisted(() => ({
   collapseSpy: vi.fn(),
   expandSpy: vi.fn(),
   listenMock: vi.fn().mockResolvedValue(() => {}),
+  capturedMenuHandlers: { current: null as Record<string, (val?: string) => void> | null },
 }));
 
 // mock react-resizable-panels：Panel 把 ref 暴露为 { collapse, expand }
@@ -43,10 +44,21 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
 }));
 
-// mock @tauri-apps/api/window（getCurrentWindow().setTitle）
+// mock @tauri-apps/api/app（getVersion）
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: vi.fn().mockResolvedValue("0.1.1"),
+}));
+
+// mock @tauri-apps/plugin-dialog（message）
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  message: vi.fn().mockResolvedValue(undefined),
+}));
+
+// mock @tauri-apps/api/window（getCurrentWindow().setTitle + show）
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
     setTitle: vi.fn().mockResolvedValue(undefined),
+    show: vi.fn().mockResolvedValue(undefined),
   }),
 }));
 
@@ -77,6 +89,12 @@ vi.mock("./components/SettingsPanel", () => ({
 vi.mock("./components/RecentFilesDialog", () => ({
   default: () => <div data-testid="recent-dialog" />,
 }));
+vi.mock("./components/TitleBar", () => ({
+  default: (props: any) => {
+    capturedMenuHandlers.current = props.menuHandlers;
+    return <div data-testid="titlebar" />;
+  },
+}));
 
 // ============ 状态管理 ============
 
@@ -87,6 +105,9 @@ import { useTestSuite } from "./hooks/useTestSuite";
 import { useI18n } from "./hooks/useI18n";
 import { zh } from "./locales/zh";
 import type { AppSettings, CustomThemeConfig, CustomThemeColors } from "./types";
+import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
+import { message } from "@tauri-apps/plugin-dialog";
 
 // 简单的 t 函数
 function makeT() {
@@ -537,10 +558,50 @@ describe("buildCustomThemeCssText 不得用不透明 --bg-terminal 覆盖编辑�
 });
 
 describe("buildCustomThemeCssText panel / mask / 图片 URL", () => {
-  it("panel_alpha=82 → --panel-bg-alpha 包含 0.82", () => {
+  it("panel_alpha=82 → --panel-bg-alpha 使用 panel_bg RGB（#181825 → 24,24,37）", () => {
     const custom = makeCustomThemeConfig({ panel_alpha: 82 });
     const css = buildCustomThemeCssText(custom, null);
-    expect(css).toContain("--panel-bg-alpha: rgba(30, 30, 46, 0.82)");
+    expect(css).toContain("--panel-bg-alpha: rgba(24, 24, 37, 0.82)");
+  });
+
+  it("--panel-bg-alpha 使用 panel_bg 的 RGB，而非 bg 的 RGB", () => {
+    const custom = makeCustomThemeConfig({
+      colors: makeCustomThemeColors({
+        bg: "#0a0a0a",        // rgb(10, 10, 10)
+        panel_bg: "#181825",  // rgb(24, 24, 37)
+      }),
+    });
+    const css = buildCustomThemeCssText(custom, null);
+    expect(css).toContain("--panel-bg-alpha: rgba(24, 24, 37, 0.82)");
+    expect(css).not.toContain("--panel-bg-alpha: rgba(10, 10, 10");
+  });
+
+  it("--panel-bg-alt-alpha 也使用 panel_bg 的 RGB", () => {
+    const custom = makeCustomThemeConfig({ panel_alpha: 80 });
+    const css = buildCustomThemeCssText(custom, null);
+    // panel_bg=#181825 → rgb(24, 24, 37), alpha = min(0.80+0.03, 1) ≈ 0.83
+    // 浮点精度：0.8+0.03=0.8300000000000001，只检查前缀
+    expect(css).toContain("--panel-bg-alt-alpha: rgba(24, 24, 37, 0.83");
+  });
+
+  it("panel_alpha=0 → alpha 为 0", () => {
+    const css = buildCustomThemeCssText(makeCustomThemeConfig({ panel_alpha: 0 }), null);
+    expect(css).toContain("--panel-bg-alpha: rgba(24, 24, 37, 0)");
+  });
+
+  it("panel_alpha=100 → alpha 为 1", () => {
+    const css = buildCustomThemeCssText(makeCustomThemeConfig({ panel_alpha: 100 }), null);
+    expect(css).toContain("--panel-bg-alpha: rgba(24, 24, 37, 1)");
+  });
+
+  it("mask_opacity=0 → --mask-opacity 为 0", () => {
+    const css = buildCustomThemeCssText(makeCustomThemeConfig({ mask_opacity: 0 }), null);
+    expect(css).toContain("--mask-opacity: 0");
+  });
+
+  it("mask_opacity=100 → --mask-opacity 为 1", () => {
+    const css = buildCustomThemeCssText(makeCustomThemeConfig({ mask_opacity: 100 }), null);
+    expect(css).toContain("--mask-opacity: 1");
   });
 
   it("mask_opacity=35 → --mask-opacity 为 0.35", () => {
@@ -767,5 +828,214 @@ describe("App 主题预览渲染（themePreview 优先于持久化 settings）",
     const css = styleEl!.textContent ?? "";
     expect(css).toContain('--bg-image: url("blob:http://localhost/preview.png")');
     expect(css).toContain("--editor-surface-bg: rgba(30, 30, 46, 0.85)");
+  });
+});
+
+// ============ Windows keydown 快捷键接管测试 ============
+// jsdom 环境 navigator.platform 非 Mac，keydown handler 会被注册
+// Editor 被 mock 为 div，editorRef.current 为 null，Monaco 相关快捷键验证不 crash 即可
+
+describe("Windows keydown 快捷键接管", () => {
+  beforeEach(() => {
+    collapseSpy.mockClear();
+    expandSpy.mockClear();
+    listenMock.mockClear();
+    resetStores(makeSettings());
+  });
+
+  it("Ctrl+N 触发 newTab", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true });
+
+    expect(useTabs.getState().newTab).toHaveBeenCalledWith("cpp");
+  });
+
+  it("Ctrl+S 触发 saveTab", async () => {
+    useTabs.setState({ activeId: "tab1" });
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+
+    expect(useTabs.getState().saveTab).toHaveBeenCalledWith("tab1");
+  });
+
+  it("Ctrl+Shift+S 触发 saveTabAs", async () => {
+    useTabs.setState({ activeId: "tab1" });
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true, shiftKey: true });
+
+    expect(useTabs.getState().saveTabAs).toHaveBeenCalledWith("tab1");
+  });
+
+  it("Ctrl+W 终端无焦点时触发 closeTab", async () => {
+    useTabs.setState({ activeId: "tab1" });
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+
+    expect(useTabs.getState().closeTab).toHaveBeenCalledWith("tab1");
+  });
+
+  it("Ctrl+W 无 activeId 时不触发 closeTab", async () => {
+    useTabs.setState({ activeId: null });
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+
+    expect(useTabs.getState().closeTab).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+Shift+W 触发 closeAll", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "w", ctrlKey: true, shiftKey: true });
+
+    expect(useTabs.getState().closeAll).toHaveBeenCalled();
+  });
+
+  it("Ctrl+, 打开设置面板", async () => {
+    const { container } = render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+
+    // SettingsPanel mock 为 div，验证无 crash 即可（setSettingsOpen 内部状态）
+    expect(container).toBeTruthy();
+  });
+
+  it("Ctrl+= 增大编辑器字号", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "=", ctrlKey: true });
+
+    const saveMock = useSettings.getState().save as ReturnType<typeof vi.fn>;
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    const saved = saveMock.mock.calls[0][0] as AppSettings;
+    expect(saved.editor.font_size).toBe(16); // 14 + 2
+  });
+
+  it("Ctrl+- 减小编辑器字号", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "-", ctrlKey: true });
+
+    const saveMock = useSettings.getState().save as ReturnType<typeof vi.fn>;
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    const saved = saveMock.mock.calls[0][0] as AppSettings;
+    expect(saved.editor.font_size).toBe(12); // 14 - 2
+  });
+
+  it("Ctrl+0 重置编辑器字号", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "0", ctrlKey: true });
+
+    const saveMock = useSettings.getState().save as ReturnType<typeof vi.fn>;
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    const saved = saveMock.mock.calls[0][0] as AppSettings;
+    expect(saved.editor.font_size).toBe(14); // FONT_SIZE_DEFAULT
+  });
+
+  it("Ctrl+F 不 crash（editorRef 为 null 时静默返回）", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    // Editor mock 为 div，editorRef.current 为 null，triggerFind 应静默返回
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    // 无 crash 即通过
+  });
+
+  it("Ctrl+G 不 crash（editorRef 为 null 时静默返回）", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "g", ctrlKey: true });
+  });
+
+  it("Ctrl+Shift+G 不 crash 且不与 Ctrl+G 冲突", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "g", ctrlKey: true, shiftKey: true });
+    // 无 crash 即通过
+  });
+
+  it("Shift+Alt+F 触发格式化", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    // formatRef.current 调用 invoke("format_code")，invoke 被 mock 为 resolve(undefined)
+    // 内部会 catch 并处理，验证不 crash
+    fireEvent.keyDown(window, { key: "f", shiftKey: true, altKey: true });
+  });
+
+  it("Ctrl+\\ 切换输出面板（调用 collapse）", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    // 面板未折叠 → Ctrl+\ 调用 collapse
+    fireEvent.keyDown(window, { key: "\\", ctrlKey: true });
+    expect(collapseSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("metaKey 为 true 时不触发任何快捷键", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true, metaKey: true });
+    expect(useTabs.getState().newTab).not.toHaveBeenCalled();
+  });
+});
+
+// ============ 菜单 handler: toggle_devtools 和 about ============
+
+describe("菜单 handler: toggle_devtools 和 about", () => {
+  beforeEach(() => {
+    collapseSpy.mockClear();
+    expandSpy.mockClear();
+    listenMock.mockClear();
+    vi.mocked(invoke).mockClear();
+    vi.mocked(getVersion).mockClear();
+    vi.mocked(message).mockClear();
+    resetStores(makeSettings());
+  });
+
+  it("toggle_devtools handler 调用 invoke(\"toggle_devtools\")", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    act(() => {
+      capturedMenuHandlers.current?.toggle_devtools();
+    });
+
+    expect(invoke).toHaveBeenCalledWith("toggle_devtools");
+  });
+
+  it("about handler 使用 getVersion 获取版本并调用 message 显示信息", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    await act(async () => {
+      capturedMenuHandlers.current?.about();
+    });
+
+    expect(getVersion).toHaveBeenCalled();
+    expect(message).toHaveBeenCalled();
+    const msgArg = vi.mocked(message).mock.calls[0][0] as string;
+    expect(msgArg).toContain("0.1.1");
+    expect(msgArg).toContain("YuanMing");
+    expect(msgArg).toContain("MIT License");
+    expect(msgArg).toContain("https://github.com/YuanMing/RunCode");
   });
 });

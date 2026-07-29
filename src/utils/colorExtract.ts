@@ -5,6 +5,8 @@
 //
 // 与后端 settings.rs CustomThemeColors 对应（12 个 HEX 字符串 + baseMode）
 
+import type { CustomThemeColors } from "../types";
+
 export interface ExtractedColors {
   bg: string;
   panel_bg: string;
@@ -129,6 +131,33 @@ export function adjustLightness(hex: string, amount: number): string {
   const newL = Math.max(0, Math.min(1, l + amount / 100));
   const [nr, ng, nb] = hslToRgb(h, s, newL);
   return rgbToHex(nr, ng, nb);
+}
+
+/**
+ * 从 5 个可编辑色 + baseMode 派生出完整 12 色。
+ * 用户改任一可编辑色后调用此函数重算派生色，保证一致性。
+ */
+export function rederiveColors(
+  editable: { bg: string; panel_bg: string; text: string; border: string; primary: string },
+  baseMode: "dark" | "light",
+): CustomThemeColors {
+  const panelBgAlt = adjustLightness(editable.panel_bg, baseMode === "dark" ? 4 : -3);
+  const primaryHover = adjustLightness(editable.primary, baseMode === "dark" ? 8 : -8);
+  const [pr, pg, pb] = hexToRgb(editable.primary);
+  return {
+    bg: editable.bg,
+    panel_bg: editable.panel_bg,
+    panel_bg_alt: panelBgAlt,
+    text: editable.text,
+    text_muted: baseMode === "dark" ? "#a3a3a3" : "#737373",
+    border: editable.border,
+    primary: editable.primary,
+    primary_hover: primaryHover,
+    primary_foreground: "#ffffff",
+    primary_soft: `rgba(${pr}, ${pg}, ${pb}, 0.14)`,
+    primary_border: `rgba(${pr}, ${pg}, ${pb}, 0.40)`,
+    bg_terminal: editable.bg,
+  };
 }
 
 // ============ K-means 聚类 ============

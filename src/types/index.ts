@@ -189,11 +189,11 @@ export interface CustomThemeConfig {
   colors: CustomThemeColors;
   /** 亮度模式："dark" / "light"，决定 Monaco base + 语义色基础 */
   base_mode: "dark" | "light";
-  /** 面板透明度 50~95（百分比整数） */
+  /** 面板透明度 0~100（百分比整数） */
   panel_alpha: number;
-  /** 编辑器透明度 70~100（百分比整数） */
+  /** 编辑器透明度 0~100（百分比整数） */
   editor_alpha: number;
-  /** 图片遮罩强度 0~60（百分比整数） */
+  /** 图片遮罩强度 0~100（百分比整数） */
   mask_opacity: number;
 }
 

@@ -14,6 +14,7 @@ import Terminal from "./components/Terminal";
 import StatusBar from "./components/StatusBar";
 import SettingsPanel from "./components/SettingsPanel";
 import RecentFilesDialog from "./components/RecentFilesDialog";
+import TitleBar from "./components/TitleBar";
 import { useRunManager } from "./hooks/useRunManager";
 import { useTestOptions } from "./hooks/useTestOptions";
 import { useTestSuite } from "./hooks/useTestSuite";
@@ -22,6 +23,8 @@ import { useSettings } from "./hooks/useSettings";
 import { useI18n, getT } from "./hooks/useI18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
+import { message } from "@tauri-apps/plugin-dialog";
 import type { AppErrorPayload, AppSettings, CustomThemeConfig, FormatResult } from "./types";
 import {
   getEffectiveTheme,
@@ -55,7 +58,8 @@ export function buildCustomThemeCssText(
 ): string {
   const c = custom.colors;
   const [pr, pg, pb] = hexToRgb(c.primary);
-  const [br, bgg, bb] = hexToRgb(c.bg);
+  // c.bg 直接以 hex 字符串使用，无需分解 RGB
+  const [pbr, pbg, pbb] = hexToRgb(c.panel_bg);
   const [tr, tg, tb] = hexToRgb(c.bg_terminal);
   const panelA = custom.panel_alpha / 100;
   const editorA = custom.editor_alpha / 100;
@@ -74,8 +78,8 @@ export function buildCustomThemeCssText(
   --text: ${c.text};
   --text-muted: ${c.text_muted};
   --bg-terminal: ${c.bg_terminal};
-  --panel-bg-alpha: rgba(${br}, ${bgg}, ${bb}, ${panelA});
-  --panel-bg-alt-alpha: rgba(${br}, ${bgg}, ${bb}, ${Math.min(panelA + 0.03, 1)});
+  --panel-bg-alpha: rgba(${pbr}, ${pbg}, ${pbb}, ${panelA});
+  --panel-bg-alt-alpha: rgba(${pbr}, ${pbg}, ${pbb}, ${Math.min(panelA + 0.03, 1)});
   --editor-surface-bg: rgba(${tr}, ${tg}, ${tb}, ${editorA});
   --bg-image: ${bgImageUrl ? `url("${bgImageUrl}")` : "none"};
   --mask-opacity: ${maskA};
@@ -316,6 +320,107 @@ function App() {
   const formatRef = useRef(handleFormat);
   formatRef.current = handleFormat;
 
+  // 统一菜单 handler（macOS listen 和 Windows 前端菜单共用）
+  const triggerEditorAction = useCallback((action: string) => {
+    const handle = editorRef.current;
+    if (!handle) return;
+    handle.focus();
+    handle.trigger(action);
+  }, []);
+
+  const menuHandlers: Record<string, (val?: string) => void> = {
+    settings: () => setSettingsOpen(true),
+    file_new: () => handlersRef.current.newTab("cpp"),
+    file_open: () => void handlersRef.current.openTabDialog(),
+    file_save: () => {
+      const id = useTabs.getState().activeId;
+      if (id) void handlersRef.current.saveTab(id);
+    },
+    file_save_as: () => {
+      const id = useTabs.getState().activeId;
+      if (id) void handlersRef.current.saveTabAs(id);
+    },
+    file_recent: () => setRecentOpen(true),
+    file_close: () => {
+      const id = useTabs.getState().activeId;
+      if (id) void handlersRef.current.closeTab(id);
+    },
+    file_close_all: () => void handlersRef.current.closeAll(),
+    edit_undo: () => triggerEditorAction("undo"),
+    edit_redo: () => triggerEditorAction("redo"),
+    edit_cut: () => triggerEditorAction("editor.action.clipboardCutAction"),
+    edit_copy: () => triggerEditorAction("editor.action.clipboardCopyAction"),
+    edit_paste: () => triggerEditorAction("editor.action.clipboardPasteAction"),
+    edit_select_all: () => triggerEditorAction("editor.action.selectAll"),
+    edit_format: () => void formatRef.current(),
+    find: () => triggerEditorAction("actions.find"),
+    find_next: () => triggerEditorAction("editor.action.nextMatchFindAction"),
+    find_prev: () => triggerEditorAction("editor.action.previousMatchFindAction"),
+    replace: () => triggerEditorAction("editor.action.startFindReplaceAction"),
+    goto_line: () => triggerEditorAction("editor.action.gotoLine"),
+    set_layout: (val) => {
+      if (val) updateSettings({ general: { ...useSettings.getState().settings!.general, layout: val } });
+    },
+    toggle_auto_hide: () => {
+      const cur = useSettings.getState().settings!.general.auto_hide_panel;
+      updateSettings({ general: { ...useSettings.getState().settings!.general, auto_hide_panel: !cur } });
+    },
+    font_inc: () => {
+      const s = useSettings.getState().settings!;
+      if (terminalFocusedRef.current) {
+        const cur = s.editor.terminal_font_size ?? FONT_SIZE_DEFAULT;
+        const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
+        updateSettings({ editor: { ...s.editor, terminal_font_size: next } });
+      } else {
+        const cur = s.editor.font_size ?? FONT_SIZE_DEFAULT;
+        const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
+        updateSettings({ editor: { ...s.editor, font_size: next } });
+      }
+    },
+    font_dec: () => {
+      const s = useSettings.getState().settings!;
+      if (terminalFocusedRef.current) {
+        const cur = s.editor.terminal_font_size ?? FONT_SIZE_DEFAULT;
+        const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
+        updateSettings({ editor: { ...s.editor, terminal_font_size: next } });
+      } else {
+        const cur = s.editor.font_size ?? FONT_SIZE_DEFAULT;
+        const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
+        updateSettings({ editor: { ...s.editor, font_size: next } });
+      }
+    },
+    font_reset: () => {
+      const s = useSettings.getState().settings!;
+      if (terminalFocusedRef.current) {
+        updateSettings({ editor: { ...s.editor, terminal_font_size: FONT_SIZE_DEFAULT } });
+      } else {
+        updateSettings({ editor: { ...s.editor, font_size: FONT_SIZE_DEFAULT } });
+      }
+    },
+    toggle_panel: () => {
+      const ref = rightPanelRef.current;
+      if (!ref) return;
+      if (panelCollapsedRef.current) ref.expand();
+      else ref.collapse();
+    },
+    toggle_devtools: () => {
+      void invoke("toggle_devtools");
+    },
+    about: () => {
+      void getVersion().then((version) => {
+        const msg = `RunCode\n${t("about.version")}: ${version}\n${t("about.author")}: YuanMing\n${t("about.license")}: MIT License\n${t("about.copyright")}: \u00A9 2026 YuanMing\n${t("about.website")}: https://github.com/YuanMing/RunCode`;
+        void message(msg, { title: t("menu.about"), kind: "info" });
+      });
+    },
+    help: () => { /* no-op */ },
+  };
+
+  const menuHandlersRef = useRef(menuHandlers);
+  menuHandlersRef.current = menuHandlers;
+
+  // 平台检测（仅 Windows 渲染前端标题栏）
+  const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
   // 应用主题到根元素
   // 预览存在时强制用 "custom"（即使持久化 settings 还没切到 custom）
   useEffect(() => {
@@ -380,139 +485,262 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.general.theme, customThemeKey, bgImageUrl]);
 
-  // 监听菜单事件
+  // 监听菜单事件（macOS 原生菜单触发；Windows 无原生菜单不触发）
   useEffect(() => {
     const unlistens: UnlistenFn[] = [];
     const setup = async () => {
-      // RunCode 菜单
-      unlistens.push(await listen("menu-settings", () => setSettingsOpen(true)));
+      // 事件名 → handler key 映射
+      const eventMap: Record<string, string> = {
+        "menu-settings": "settings",
+        "menu-file-new": "file_new",
+        "menu-file-open": "file_open",
+        "menu-file-save": "file_save",
+        "menu-file-save-as": "file_save_as",
+        "menu-file-recent": "file_recent",
+        "menu-file-close": "file_close",
+        "menu-file-close-all": "file_close_all",
+        "menu-edit-format": "edit_format",
+        "menu-find": "find",
+        "menu-find-next": "find_next",
+        "menu-find-prev": "find_prev",
+        "menu-replace": "replace",
+        "menu-goto-line": "goto_line",
+        "menu-toggle-auto-hide": "toggle_auto_hide",
+        "menu-toggle-devtools": "toggle_devtools",
+        "menu-font-inc": "font_inc",
+        "menu-font-dec": "font_dec",
+        "menu-font-reset": "font_reset",
+        "menu-toggle-panel": "toggle_panel",
+        "menu-help": "help",
+      };
 
-      // 视图菜单
+      for (const [event, key] of Object.entries(eventMap)) {
+        unlistens.push(
+          await listen(event, () => menuHandlersRef.current[key]()),
+        );
+      }
+
+      // layout 事件需要 payload（"horizontal"/"vertical"）
       unlistens.push(
         await listen<string>("menu-layout", (e) => {
-          updateSettings({ general: { ...useSettings.getState().settings!.general, layout: e.payload } });
+          menuHandlersRef.current["set_layout"](e.payload);
         }),
-      );
-      unlistens.push(
-        await listen("menu-toggle-auto-hide", () => {
-          const cur = useSettings.getState().settings!.general.auto_hide_panel;
-          updateSettings({ general: { ...useSettings.getState().settings!.general, auto_hide_panel: !cur } });
-        }),
-      );
-      unlistens.push(
-        await listen("menu-font-inc", () => {
-          const s = useSettings.getState().settings!;
-          if (terminalFocusedRef.current) {
-            const cur = s.editor.terminal_font_size ?? FONT_SIZE_DEFAULT;
-            const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
-            updateSettings({ editor: { ...s.editor, terminal_font_size: next } });
-          } else {
-            const cur = s.editor.font_size ?? FONT_SIZE_DEFAULT;
-            const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
-            updateSettings({ editor: { ...s.editor, font_size: next } });
-          }
-        }),
-      );
-      unlistens.push(
-        await listen("menu-font-dec", () => {
-          const s = useSettings.getState().settings!;
-          if (terminalFocusedRef.current) {
-            const cur = s.editor.terminal_font_size ?? FONT_SIZE_DEFAULT;
-            const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
-            updateSettings({ editor: { ...s.editor, terminal_font_size: next } });
-          } else {
-            const cur = s.editor.font_size ?? FONT_SIZE_DEFAULT;
-            const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
-            updateSettings({ editor: { ...s.editor, font_size: next } });
-          }
-        }),
-      );
-      unlistens.push(
-        await listen("menu-font-reset", () => {
-          const s = useSettings.getState().settings!;
-          if (terminalFocusedRef.current) {
-            updateSettings({ editor: { ...s.editor, terminal_font_size: FONT_SIZE_DEFAULT } });
-          } else {
-            updateSettings({ editor: { ...s.editor, font_size: FONT_SIZE_DEFAULT } });
-          }
-        }),
-      );
-      unlistens.push(
-        await listen("menu-toggle-panel", () => {
-          const ref = rightPanelRef.current;
-          if (!ref) return;
-          if (panelCollapsedRef.current) {
-            ref.expand();
-          } else {
-            ref.collapse();
-          }
-        }),
-      );
-      // 帮助菜单（暂时留空）
-      unlistens.push(await listen("menu-help", () => { /* no-op */ }));
-
-      // 文件菜单
-      unlistens.push(await listen("menu-file-new", () => handlersRef.current.newTab("cpp")));
-      unlistens.push(
-        await listen("menu-file-open", () => void handlersRef.current.openTabDialog()),
-      );
-      unlistens.push(
-        await listen("menu-file-save", () => {
-          const id = useTabs.getState().activeId;
-          if (id) void handlersRef.current.saveTab(id);
-        }),
-      );
-      unlistens.push(
-        await listen("menu-file-save-as", () => {
-          const id = useTabs.getState().activeId;
-          if (id) void handlersRef.current.saveTabAs(id);
-        }),
-      );
-      unlistens.push(await listen("menu-file-recent", () => setRecentOpen(true)));
-      unlistens.push(
-        await listen("menu-file-close", () => {
-          const id = useTabs.getState().activeId;
-          if (id) void handlersRef.current.closeTab(id);
-        }),
-      );
-      unlistens.push(
-        await listen("menu-file-close-all", () => {
-          void handlersRef.current.closeAll();
-        }),
-      );
-
-      // 编辑菜单（格式化）
-      unlistens.push(await listen("menu-edit-format", () => void formatRef.current()));
-
-      // 查找菜单 → Monaco 触发
-      const triggerFind = (action: string) => {
-        const handle = editorRef.current;
-        if (!handle) return;
-        handle.focus(); // 防御：确保编辑器有焦点，避免 action disabled
-        handle.trigger(action);
-      };
-      unlistens.push(await listen("menu-find", () => triggerFind("actions.find")));
-      unlistens.push(
-        await listen("menu-find-next", () =>
-          triggerFind("editor.action.nextMatchFindAction"),
-        ),
-      );
-      unlistens.push(
-        await listen("menu-find-prev", () =>
-          triggerFind("editor.action.previousMatchFindAction"),
-        ),
-      );
-      unlistens.push(
-        await listen("menu-replace", () =>
-          triggerFind("editor.action.startFindReplaceAction"),
-        ),
-      );
-      unlistens.push(
-        await listen("menu-goto-line", () => triggerFind("editor.action.gotoLine")),
       );
     };
     void setup();
     return () => unlistens.forEach((u) => u());
+  }, []);
+
+  // 窗口标题栏激活：macOS 直接显示；Windows 激活插件后显示
+  useEffect(() => {
+    if (isMac) {
+      void invoke("activate_custom_titlebar").catch(() => {});
+      void getCurrentWindow().show().catch(() => {});
+      return;
+    }
+
+    // Windows：激活自定义标题栏，等 data-tauri-plugin-decoration-active 属性出现后再 show
+    let disposed = false;
+    let settled = false;
+    let timeoutId: number | undefined;
+
+    const revealActive = async () => {
+      if (disposed || settled) return;
+      settled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      try {
+        await getCurrentWindow().show();
+      } catch {
+        // show 失败，忽略
+      }
+    };
+
+    const showWindow = async () => {
+      if (disposed || settled) return;
+      settled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      try {
+        await getCurrentWindow().show();
+      } catch {
+        // show 失败，忽略
+      }
+    };
+
+    // 观察插件激活属性
+    const observer = new MutationObserver(() => {
+      if (document.querySelector("[data-tauri-plugin-decoration-active]")) {
+        void revealActive();
+      }
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
+
+    // 8 秒超时兜底：仅 show 窗口，不取消插件（插件样式表超时 4s + 余量）
+    timeoutId = window.setTimeout(() => {
+      void showWindow();
+    }, 8000);
+
+    // 发起激活请求，失败时直接 show 窗口
+    void invoke("activate_custom_titlebar").catch(() => {
+      void showWindow();
+    });
+
+    return () => {
+      disposed = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      observer.disconnect();
+    };
+  }, []);
+
+  // Windows 快捷键接管：WebView2 劫持键盘事件导致原生菜单 accelerator 不触发（wry#451）
+  // 在 webview 内用 capture 阶段 keydown 接管，macOS 原生 accelerator 正常无需注册
+  useEffect(() => {
+    if (isMac) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey) return;
+      const ctrl = e.ctrlKey;
+      const shift = e.shiftKey;
+      const alt = e.altKey;
+      const key = e.key.toLowerCase();
+
+      const match = (c: boolean, s: boolean, a: boolean, k: string) =>
+        ctrl === c && shift === s && alt === a && key === k;
+
+      // 文件菜单
+      if (match(true, false, false, "n")) {
+        e.preventDefault(); e.stopPropagation();
+        handlersRef.current.newTab("cpp");
+        return;
+      }
+      if (match(true, false, false, "o")) {
+        e.preventDefault(); e.stopPropagation();
+        void handlersRef.current.openTabDialog();
+        return;
+      }
+      if (match(true, false, false, "s")) {
+        e.preventDefault(); e.stopPropagation();
+        const id = useTabs.getState().activeId;
+        if (id) void handlersRef.current.saveTab(id);
+        return;
+      }
+      if (match(true, true, false, "s")) {
+        e.preventDefault(); e.stopPropagation();
+        const id = useTabs.getState().activeId;
+        if (id) void handlersRef.current.saveTabAs(id);
+        return;
+      }
+      // Ctrl+W：终端焦点时放行（保留删除单词）
+      if (match(true, false, false, "w") && !terminalFocusedRef.current) {
+        e.preventDefault(); e.stopPropagation();
+        const id = useTabs.getState().activeId;
+        if (id) void handlersRef.current.closeTab(id);
+        return;
+      }
+      if (match(true, true, false, "w")) {
+        e.preventDefault(); e.stopPropagation();
+        void handlersRef.current.closeAll();
+        return;
+      }
+
+      // 编辑菜单：格式化
+      if (match(false, true, true, "f")) {
+        e.preventDefault(); e.stopPropagation();
+        void formatRef.current();
+        return;
+      }
+
+      // 查找菜单 → Monaco 触发
+      if (match(true, false, false, "f")) {
+        e.preventDefault(); e.stopPropagation();
+        triggerEditorAction("actions.find");
+        return;
+      }
+      if (match(true, true, false, "g")) {
+        e.preventDefault(); e.stopPropagation();
+        triggerEditorAction("editor.action.previousMatchFindAction");
+        return;
+      }
+      if (match(true, false, true, "f")) {
+        e.preventDefault(); e.stopPropagation();
+        triggerEditorAction("editor.action.startFindReplaceAction");
+        return;
+      }
+      if (match(true, false, false, "g")) {
+        e.preventDefault(); e.stopPropagation();
+        triggerEditorAction("editor.action.gotoLine");
+        return;
+      }
+
+      // 设置
+      if (match(true, false, false, ",")) {
+        e.preventDefault(); e.stopPropagation();
+        setSettingsOpen(true);
+        return;
+      }
+
+      // 视图菜单：字号缩放
+      if (match(true, false, false, "=")) {
+        e.preventDefault(); e.stopPropagation();
+        const s = useSettings.getState().settings;
+        if (!s) return;
+        if (terminalFocusedRef.current) {
+          const cur = s.editor.terminal_font_size ?? FONT_SIZE_DEFAULT;
+          const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
+          updateSettings({ editor: { ...s.editor, terminal_font_size: next } });
+        } else {
+          const cur = s.editor.font_size ?? FONT_SIZE_DEFAULT;
+          const next = Math.min(FONT_SIZE_MAX, cur + FONT_SIZE_STEP);
+          updateSettings({ editor: { ...s.editor, font_size: next } });
+        }
+        return;
+      }
+      if (match(true, false, false, "-")) {
+        e.preventDefault(); e.stopPropagation();
+        const s = useSettings.getState().settings;
+        if (!s) return;
+        if (terminalFocusedRef.current) {
+          const cur = s.editor.terminal_font_size ?? FONT_SIZE_DEFAULT;
+          const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
+          updateSettings({ editor: { ...s.editor, terminal_font_size: next } });
+        } else {
+          const cur = s.editor.font_size ?? FONT_SIZE_DEFAULT;
+          const next = Math.max(FONT_SIZE_MIN, cur - FONT_SIZE_STEP);
+          updateSettings({ editor: { ...s.editor, font_size: next } });
+        }
+        return;
+      }
+      if (match(true, false, false, "0")) {
+        e.preventDefault(); e.stopPropagation();
+        const s = useSettings.getState().settings;
+        if (!s) return;
+        if (terminalFocusedRef.current) {
+          updateSettings({ editor: { ...s.editor, terminal_font_size: FONT_SIZE_DEFAULT } });
+        } else {
+          updateSettings({ editor: { ...s.editor, font_size: FONT_SIZE_DEFAULT } });
+        }
+        return;
+      }
+
+      // Ctrl+\：终端焦点时放行（保留 SIGQUIT）
+      if (match(true, false, false, "\\") && !terminalFocusedRef.current) {
+        e.preventDefault(); e.stopPropagation();
+        const ref = rightPanelRef.current;
+        if (!ref) return;
+        if (panelCollapsedRef.current) {
+          ref.expand();
+        } else {
+          ref.collapse();
+        }
+        return;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, []);
 
   // 监听 PTY 首次输入事件：重置计时起点为用户首次输入时刻
@@ -583,6 +811,13 @@ function App() {
 
   return (
     <div className="app-layout">
+      {!isMac && (
+        <TitleBar
+          menuHandlers={menuHandlers}
+          layout={layout}
+          autoHide={autoHide}
+        />
+      )}
       <TabBar
         tabs={tabs}
         activeId={activeId}

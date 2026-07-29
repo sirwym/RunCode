@@ -8,11 +8,11 @@ interface CustomThemePreviewProps {
   colors: ExtractedColors;
   /** 图片 URL（blob: 或 asset:），用于缩略图与背景预览 */
   imageUrl: string;
-  /** 初始面板透明度 50~95 */
+  /** 初始面板透明度 0~100 */
   initialPanelAlpha: number;
-  /** 初始编辑器透明度 70~100 */
+  /** 初始编辑器透明度 0~100 */
   initialEditorAlpha: number;
-  /** 初始图片遮罩强度 0~60 */
+  /** 初始图片遮罩强度 0~100 */
   initialMaskOpacity: number;
   /** 应用主题时回传 3 个滑块值 */
   onApply: (params: {
@@ -26,16 +26,31 @@ interface CustomThemePreviewProps {
     editorAlpha: number;
     maskOpacity: number;
   }) => void;
+  /** 色板变化时回传 5 个可编辑色（用于驱动主界面预览 + 派生色重算） */
+  onColorChange?: (colors: {
+    bg: string;
+    panel_bg: string;
+    text: string;
+    border: string;
+    primary: string;
+  }) => void;
   onCancel: () => void;
 }
 
-function Swatch({ label, color }: { label: string; color: string }) {
+function ColorSwatch({ label, color, onChange }: { label: string; color: string; onChange: (v: string) => void }) {
   return (
     <div className="flex flex-col items-center gap-1">
       <div
-        className="w-10 h-10 border"
+        className="relative w-10 h-10 border"
         style={{ backgroundColor: color, borderColor: "var(--border)" }}
-      />
+      >
+        <input
+          type="color"
+          value={color}
+          onChange={(e) => onChange(e.target.value)}
+          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+        />
+      </div>
       <span
         className="text-[10px] font-mono"
         style={{ color: "var(--text-muted)" }}
@@ -127,8 +142,8 @@ export function CustomThemeSliders({
       <SliderRow
         label={t("settings.panelAlpha")}
         value={panelAlpha}
-        min={50}
-        max={95}
+        min={0}
+        max={100}
         step={1}
         onChange={(v) => onChange({ panelAlpha: v, editorAlpha, maskOpacity })}
         accentColor={accentColor}
@@ -136,7 +151,7 @@ export function CustomThemeSliders({
       <SliderRow
         label={t("settings.editorAlpha")}
         value={editorAlpha}
-        min={70}
+        min={0}
         max={100}
         step={1}
         onChange={(v) => onChange({ panelAlpha, editorAlpha: v, maskOpacity })}
@@ -146,10 +161,66 @@ export function CustomThemeSliders({
         label={t("settings.maskOpacity")}
         value={maskOpacity}
         min={0}
-        max={60}
+        max={100}
         step={1}
         onChange={(v) => onChange({ panelAlpha, editorAlpha, maskOpacity: v })}
         accentColor={accentColor}
+      />
+    </div>
+  );
+}
+
+// 纯受控色板组：可被 CustomThemePreview（状态 B）和 SettingsPanel 状态 C 复用
+export interface CustomThemeColorPickerProps {
+  bg: string;
+  panel_bg: string;
+  primary: string;
+  text: string;
+  border: string;
+  onChange: (colors: {
+    bg: string;
+    panel_bg: string;
+    text: string;
+    border: string;
+    primary: string;
+  }) => void;
+}
+
+export function CustomThemeColorPicker({
+  bg,
+  panel_bg,
+  primary,
+  text,
+  border,
+  onChange,
+}: CustomThemeColorPickerProps) {
+  const t = useI18n((s) => s.t);
+  return (
+    <div className="flex gap-2 flex-wrap">
+      <ColorSwatch
+        label={t("settings.colorBg")}
+        color={bg}
+        onChange={(v) => onChange({ bg: v, panel_bg, text, border, primary })}
+      />
+      <ColorSwatch
+        label={t("settings.colorPanel")}
+        color={panel_bg}
+        onChange={(v) => onChange({ bg, panel_bg: v, text, border, primary })}
+      />
+      <ColorSwatch
+        label={t("settings.colorPrimary")}
+        color={primary}
+        onChange={(v) => onChange({ bg, panel_bg, text, border, primary: v })}
+      />
+      <ColorSwatch
+        label={t("settings.colorText")}
+        color={text}
+        onChange={(v) => onChange({ bg, panel_bg, text: v, border, primary })}
+      />
+      <ColorSwatch
+        label={t("settings.colorBorder")}
+        color={border}
+        onChange={(v) => onChange({ bg, panel_bg, text, border: v, primary })}
       />
     </div>
   );
@@ -163,6 +234,7 @@ function CustomThemePreview({
   initialMaskOpacity,
   onApply,
   onSliderChange,
+  onColorChange,
   onCancel,
 }: CustomThemePreviewProps) {
   const t = useI18n((s) => s.t);
@@ -182,10 +254,11 @@ function CustomThemePreview({
     onSliderChange?.(p);
   };
 
-  // 模拟面板/编辑器背景色（用提取的 bg + 当前 alpha，与 App.tsx 注入逻辑一致）
-  const [br, bgg, bb] = hexToRgb(colors.bg);
-  const panelBg = `rgba(${br}, ${bgg}, ${bb}, ${panelAlpha / 100})`;
-  const editorBg = `rgba(${br}, ${bgg}, ${bb}, ${editorAlpha / 100})`;
+  // 模拟面板/编辑器背景色（panel 用 panel_bg，editor 用 bg_terminal，与 App.tsx 注入逻辑一致）
+  const [pbr, pbg, pbb] = hexToRgb(colors.panel_bg);
+  const [tbr, tbg, tbb] = hexToRgb(colors.bg_terminal);
+  const panelBg = `rgba(${pbr}, ${pbg}, ${pbb}, ${panelAlpha / 100})`;
+  const editorBg = `rgba(${tbr}, ${tbg}, ${tbb}, ${editorAlpha / 100})`;
 
   return (
     <div
@@ -269,13 +342,14 @@ function CustomThemePreview({
       />
 
       {/* 色板 */}
-      <div className="flex gap-2 flex-wrap">
-        <Swatch label="BG" color={colors.bg} />
-        <Swatch label="Panel" color={colors.panel_bg} />
-        <Swatch label="Primary" color={colors.primary} />
-        <Swatch label="Text" color={colors.text} />
-        <Swatch label="Border" color={colors.border} />
-      </div>
+      <CustomThemeColorPicker
+        bg={colors.bg}
+        panel_bg={colors.panel_bg}
+        primary={colors.primary}
+        text={colors.text}
+        border={colors.border}
+        onChange={(c) => onColorChange?.(c)}
+      />
 
       {/* 操作按钮 */}
       <div className="flex gap-2">

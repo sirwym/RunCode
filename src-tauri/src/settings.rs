@@ -46,13 +46,13 @@ pub struct CustomThemeConfig {
     pub colors: CustomThemeColors,
     /// 亮度模式："dark" / "light"，决定 Monaco base + 语义色基础
     pub base_mode: String,
-    /// 面板透明度 50~95（百分比整数，向后兼容用默认值 82）
+    /// 面板透明度 0~100（百分比整数，向后兼容用默认值 82）
     #[serde(default = "default_panel_alpha")]
     pub panel_alpha: u8,
-    /// 编辑器透明度 70~100（百分比整数，默认 92）
+    /// 编辑器透明度 0~100（百分比整数，默认 92）
     #[serde(default = "default_editor_alpha")]
     pub editor_alpha: u8,
-    /// 图片遮罩强度 0~60（百分比整数，默认 20）
+    /// 图片遮罩强度 0~100（百分比整数，默认 20）
     #[serde(default = "default_mask_opacity")]
     pub mask_opacity: u8,
 }
@@ -604,6 +604,13 @@ pub fn load(base: &Path) -> AppSettings {
                 s.editor.theme = "vs-dark".to_string();
             }
         }
+    }
+
+    // Clamp alpha 值到 0~100（滑块范围扩大后的安全兜底）
+    if let Some(custom) = s.general.custom_theme.as_mut() {
+        custom.panel_alpha = custom.panel_alpha.min(100);
+        custom.editor_alpha = custom.editor_alpha.min(100);
+        custom.mask_opacity = custom.mask_opacity.min(100);
     }
 
     s
@@ -1575,5 +1582,57 @@ mod tests {
         assert_eq!(parsed.panel_alpha, 75);
         assert_eq!(parsed.editor_alpha, 88);
         assert_eq!(parsed.mask_opacity, 30);
+    }
+
+    #[test]
+    fn custom_theme_alpha_clamped_to_100() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let themes_dir = tmp.path().join("custom_themes");
+        fs::create_dir_all(&themes_dir).unwrap();
+        fs::write(themes_dir.join("test.png"), b"fake").unwrap();
+
+        let mut s = AppSettings::default();
+        s.general.theme = "custom".into();
+        s.general.custom_theme = Some(CustomThemeConfig {
+            image_file: "test.png".into(),
+            colors: sample_custom_colors(),
+            base_mode: "dark".into(),
+            panel_alpha: 150,
+            editor_alpha: 200,
+            mask_opacity: 120,
+        });
+        save(tmp.path(), &s).unwrap();
+
+        let loaded = load(tmp.path());
+        let custom = loaded.general.custom_theme.expect("custom_theme should exist");
+        assert_eq!(custom.panel_alpha, 100);
+        assert_eq!(custom.editor_alpha, 100);
+        assert_eq!(custom.mask_opacity, 100);
+    }
+
+    #[test]
+    fn custom_theme_alpha_0_and_100_preserved() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let themes_dir = tmp.path().join("custom_themes");
+        fs::create_dir_all(&themes_dir).unwrap();
+        fs::write(themes_dir.join("test.png"), b"fake").unwrap();
+
+        let mut s = AppSettings::default();
+        s.general.theme = "custom".into();
+        s.general.custom_theme = Some(CustomThemeConfig {
+            image_file: "test.png".into(),
+            colors: sample_custom_colors(),
+            base_mode: "dark".into(),
+            panel_alpha: 0,
+            editor_alpha: 100,
+            mask_opacity: 0,
+        });
+        save(tmp.path(), &s).unwrap();
+
+        let loaded = load(tmp.path());
+        let custom = loaded.general.custom_theme.unwrap();
+        assert_eq!(custom.panel_alpha, 0);
+        assert_eq!(custom.editor_alpha, 100);
+        assert_eq!(custom.mask_opacity, 0);
     }
 }

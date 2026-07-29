@@ -27,13 +27,52 @@ use commands::{
 };
 use pty::PtyManager;
 use run_manager::RunManager;
+#[cfg(target_os = "macos")]
 use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, WebviewWindow};
+use tauri_plugin_decoration::WebviewWindowExt;
+
+/// 激活自定义标题栏（tauri-plugin-decoration）
+/// Windows：创建 HTML 窗口控制按钮（含 Snap Layout）
+/// macOS：设置红绿灯按钮位置
+#[tauri::command]
+fn activate_custom_titlebar(window: WebviewWindow) -> Result<(), String> {
+    window
+        .create_overlay_titlebar()
+        .map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    window
+        .set_traffic_lights_inset(16.0, 20.0)
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// 回退到原生标题栏（插件激活超时回退用）
+#[tauri::command]
+fn show_native_fallback(window: WebviewWindow) -> Result<(), String> {
+    window
+        .restore_native_titlebar()
+        .map_err(|e| e.to_string())?;
+    window.show().map_err(|e| e.to_string())
+}
+
+/// 切换开发人员工具（DevTools）
+#[tauri::command]
+fn toggle_devtools(window: WebviewWindow) {
+    if window.is_devtools_open() {
+        window.close_devtools();
+    } else {
+        window.open_devtools();
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_decoration::init())
         .manage(RunManager::new())
         .manage(PtyManager::new())
         .invoke_handler(tauri::generate_handler![
@@ -70,8 +109,14 @@ pub fn run() {
             save_custom_theme_image,
             delete_custom_theme_image,
             get_custom_theme_image_path,
+            activate_custom_titlebar,
+            show_native_fallback,
+            toggle_devtools,
         ])
         .setup(|app| {
+            // macOS 保留原生系统菜单栏；Windows 移除原生菜单，用前端菜单栏替代
+            #[cfg(target_os = "macos")]
+            {
             // 应用菜单（RunCode）
             // macOS 专属菜单项（hide/hide_others/show_all）用 cfg 包裹
             let about = PredefinedMenuItem::about(
@@ -223,6 +268,8 @@ pub fn run() {
                 &[
                     &MenuItem::with_id(app, "help", "RunCode 帮助", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,
+                    &MenuItem::with_id(app, "toggle_devtools", "切换开发人员工具", true, None::<&str>)?,
+                    &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::about(
                         app,
                         Some("关于 RunCode"),
@@ -243,6 +290,7 @@ pub fn run() {
                 &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
             )?;
             app.set_menu(menu)?;
+            } // end cfg(target_os = "macos")
 
             // 清理 custom_themes/ 目录下未被 settings.json 引用的孤儿图片文件
             // （处理"用户点应用主题但未保存就关闭面板"产生的孤儿文件）
@@ -321,6 +369,9 @@ pub fn run() {
                 }
                 "toggle_panel" => {
                     let _ = app.emit("menu-toggle-panel", ());
+                }
+                "toggle_devtools" => {
+                    let _ = app.emit("menu-toggle-devtools", ());
                 }
                 "help" => {
                     // 帮助内容暂时留空

@@ -77,6 +77,21 @@ describe("i18n 完整性", () => {
       "menu.togglePanel",
       "menu.help",
       "menu.helpContent",
+      "menu.undo",
+      "menu.redo",
+      "menu.cut",
+      "menu.copy",
+      "menu.paste",
+      "menu.selectAll",
+      "menu.toggleDevtools",
+      "menu.about",
+    ];
+    const requiredAboutKeys = [
+      "about.version",
+      "about.author",
+      "about.license",
+      "about.copyright",
+      "about.website",
     ];
     const requiredSettingsKeys = [
       "settings.shortcuts",
@@ -91,6 +106,12 @@ describe("i18n 完整性", () => {
       "settings.testSettings",
       "settings.testTimeLimit",
       "settings.testTimeLimitHint",
+      "settings.colorBg",
+      "settings.colorPanel",
+      "settings.colorPrimary",
+      "settings.colorText",
+      "settings.colorBorder",
+      "settings.resetColors",
     ];
 
     it.each(requiredMenuKeys)("zh 与 en 都包含 %s", (k) => {
@@ -99,6 +120,11 @@ describe("i18n 完整性", () => {
     });
 
     it.each(requiredSettingsKeys)("zh 与 en 都包含 %s", (k) => {
+      expect(getByPath(zh, k), `zh 缺少 ${k}`).toBeTypeOf("string");
+      expect(getByPath(en, k), `en 缺少 ${k}`).toBeTypeOf("string");
+    });
+
+    it.each(requiredAboutKeys)("zh 与 en 都包含 %s", (k) => {
       expect(getByPath(zh, k), `zh 缺少 ${k}`).toBeTypeOf("string");
       expect(getByPath(en, k), `en 缺少 ${k}`).toBeTypeOf("string");
     });

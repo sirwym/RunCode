@@ -24,10 +24,11 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import CustomThemePreview, { CustomThemeSliders } from "./CustomThemePreview";
+import CustomThemePreview, { CustomThemeSliders, CustomThemeColorPicker } from "./CustomThemePreview";
 import {
   extractThemeColors,
   loadImageToImageData,
+  rederiveColors,
   type ExtractedColors,
 } from "../utils/colorExtract";
 
@@ -49,26 +50,56 @@ const WARNING_LEVELS = [
 // 平台检测：Windows/Linux 下快捷键显示 Ctrl，macOS 下显示 Cmd
 const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
-// 快捷键只读展示数据（与 lib.rs 菜单定义对齐）
-export const SHORTCUTS: Array<{ category: "file" | "edit" | "find" | "view" | "app"; action: string; keys: string }> = [
-  { category: "file", action: "menu.new", keys: "Cmd+N" },
-  { category: "file", action: "menu.open", keys: "Cmd+O" },
-  { category: "file", action: "menu.save", keys: "Cmd+S" },
-  { category: "file", action: "menu.saveAs", keys: "Cmd+Shift+S" },
-  { category: "file", action: "menu.close", keys: "Cmd+W" },
-  { category: "file", action: "menu.closeAll", keys: "Cmd+Shift+W" },
-  { category: "edit", action: "menu.format", keys: "Shift+Alt+F" },
-  { category: "find", action: "menu.findFind", keys: "Cmd+F" },
-  { category: "find", action: "menu.findNext", keys: "Cmd+G" },
-  { category: "find", action: "menu.findPrev", keys: "Cmd+Shift+G" },
-  { category: "find", action: "menu.replace", keys: "Cmd+Alt+F" },
-  { category: "find", action: "menu.gotoLine", keys: "Ctrl+G" },
-  { category: "view", action: "menu.fontInc", keys: "Cmd+=" },
-  { category: "view", action: "menu.fontDec", keys: "Cmd+-" },
-  { category: "view", action: "menu.fontReset", keys: "Cmd+0" },
-  { category: "view", action: "menu.togglePanel", keys: "Cmd+\\" },
-  { category: "app", action: "menu.settings", keys: "Cmd+," },
+// 快捷键平台专属定义（与 lib.rs 菜单、TitleBar、App keydown 对齐）
+// macKeys / windowsKeys 缺省表示该平台无此快捷键
+interface ShortcutDefinition {
+  category: "file" | "edit" | "find" | "view" | "app";
+  action: string;
+  macKeys?: string;
+  windowsKeys?: string;
+}
+
+export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
+  // 文件
+  { category: "file", action: "menu.new", macKeys: "Cmd+N", windowsKeys: "Ctrl+N" },
+  { category: "file", action: "menu.open", macKeys: "Cmd+O", windowsKeys: "Ctrl+O" },
+  { category: "file", action: "menu.save", macKeys: "Cmd+S", windowsKeys: "Ctrl+S" },
+  { category: "file", action: "menu.saveAs", macKeys: "Cmd+Shift+S", windowsKeys: "Ctrl+Shift+S" },
+  { category: "file", action: "menu.close", macKeys: "Cmd+W", windowsKeys: "Ctrl+W" },
+  { category: "file", action: "menu.closeAll", macKeys: "Cmd+Shift+W", windowsKeys: "Ctrl+Shift+W" },
+  // 编辑（macOS 重做为 Cmd+Shift+Z，Windows 重做为 Ctrl+Y）
+  { category: "edit", action: "menu.undo", macKeys: "Cmd+Z", windowsKeys: "Ctrl+Z" },
+  { category: "edit", action: "menu.redo", macKeys: "Cmd+Shift+Z", windowsKeys: "Ctrl+Y" },
+  { category: "edit", action: "menu.cut", macKeys: "Cmd+X", windowsKeys: "Ctrl+X" },
+  { category: "edit", action: "menu.copy", macKeys: "Cmd+C", windowsKeys: "Ctrl+C" },
+  { category: "edit", action: "menu.paste", macKeys: "Cmd+V", windowsKeys: "Ctrl+V" },
+  { category: "edit", action: "menu.selectAll", macKeys: "Cmd+A", windowsKeys: "Ctrl+A" },
+  { category: "edit", action: "menu.format", macKeys: "Shift+Alt+F", windowsKeys: "Shift+Alt+F" },
+  // 查找
+  { category: "find", action: "menu.findFind", macKeys: "Cmd+F", windowsKeys: "Ctrl+F" },
+  // Windows 的 Find Next 未由 App 接管（Ctrl+G 实际执行跳转行），故不显示
+  { category: "find", action: "menu.findNext", macKeys: "Cmd+G" },
+  { category: "find", action: "menu.findPrev", macKeys: "Cmd+Shift+G", windowsKeys: "Ctrl+Shift+G" },
+  { category: "find", action: "menu.replace", macKeys: "Cmd+Alt+F", windowsKeys: "Ctrl+Alt+F" },
+  // 跳转行：两平台均为 Ctrl+G（macOS 原生菜单也用字面 Ctrl+G）
+  { category: "find", action: "menu.gotoLine", macKeys: "Ctrl+G", windowsKeys: "Ctrl+G" },
+  // 视图
+  { category: "view", action: "menu.fontInc", macKeys: "Cmd+=", windowsKeys: "Ctrl+=" },
+  { category: "view", action: "menu.fontDec", macKeys: "Cmd+-", windowsKeys: "Ctrl+-" },
+  { category: "view", action: "menu.fontReset", macKeys: "Cmd+0", windowsKeys: "Ctrl+0" },
+  { category: "view", action: "menu.togglePanel", macKeys: "Cmd+\\", windowsKeys: "Ctrl+\\" },
+  // 应用（DevTools：macOS Cmd+Alt+I，Windows Ctrl+Shift+I）
+  { category: "app", action: "menu.settings", macKeys: "Cmd+,", windowsKeys: "Ctrl+," },
+  { category: "app", action: "menu.toggleDevtools", macKeys: "Cmd+Alt+I", windowsKeys: "Ctrl+Shift+I" },
 ];
+
+// 按平台筛选并展平为带 keys 的只读展示列表
+export function getShortcuts(isMac: boolean) {
+  return SHORTCUT_DEFINITIONS.flatMap((item) => {
+    const keys = isMac ? item.macKeys : item.windowsKeys;
+    return keys ? [{ ...item, keys }] : [];
+  });
+}
 
 export const SHORTCUT_CATEGORY_KEY: Record<string, string> = {
   file: "settings.shortcutFile",
@@ -108,6 +139,10 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   stagedImageFileRef.current = stagedImageFile;
   const [pendingDeleteImageFile, setPendingDeleteImageFile] = useState<string | null>(null);
   const originalImageFileRef = useRef<string | null>(null);
+  // 追踪图片提取的原始颜色（用于重置功能）
+  // - 导入图片时设置为 extractThemeColors 返回值
+  // - 打开面板时从持久化 settings 初始化
+  const originalColorsRef = useRef<ExtractedColors | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -128,6 +163,15 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setPendingDeleteImageFile(null);
       // 记录打开面板时已持久化的图片文件名（取消时保留）
       originalImageFileRef.current = settings?.general.custom_theme?.image_file ?? null;
+      // 初始化 originalColorsRef：从持久化 custom_theme 读取（用于重置功能）
+      if (settings?.general.custom_theme) {
+        originalColorsRef.current = {
+          ...settings.general.custom_theme.colors,
+          baseMode: settings.general.custom_theme.base_mode as "dark" | "light",
+        };
+      } else {
+        originalColorsRef.current = null;
+      }
       // 清除主题预览：打开面板时主界面保持持久化主题
       // （上次异常退出可能残留 themePreview）
       clearThemePreview();
@@ -223,6 +267,8 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setPreviewColors(colors);
       setPendingImagePath(selected);
       setPreviewImageUrl(url);
+      // 记录提取的原始颜色（用于后续重置功能）
+      originalColorsRef.current = colors;
 
       // 5. 立即驱动主界面预览：用 blob URL + 提取的颜色 + 当前 draft 滑块值构造临时 customTheme
       // 滑块值优先用 draft 中已有的 custom_theme 值（重新导入保留），否则用默认值
@@ -351,6 +397,54 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setPreviewImageUrl(null);
     // 回退到 draft 的 custom_theme（用持久化路径，不传 imageUrl）
     syncThemePreview(draft?.general.custom_theme ?? null);
+  };
+
+  // State C：色板变更 → rederiveColors 重算 12 色 → 更新 draft + 同步预览
+  const handleColorChange = (c: {
+    bg: string; panel_bg: string; text: string; border: string; primary: string;
+  }) => {
+    const ct = draft?.general.custom_theme;
+    if (!ct) return;
+    const newColors = rederiveColors(c, ct.base_mode as "dark" | "light");
+    setDraft((d) =>
+      d && d.general.custom_theme
+        ? {
+            ...d,
+            general: {
+              ...d.general,
+              custom_theme: { ...d.general.custom_theme, colors: newColors },
+            },
+          }
+        : d
+    );
+    syncThemePreview(
+      { ...ct, colors: newColors },
+      previewBlobUrlRef.current ?? undefined,
+    );
+  };
+
+  // State C：重置为提取色（从 originalColorsRef 恢复）
+  const handleResetColors = () => {
+    const original = originalColorsRef.current;
+    const ct = draft?.general.custom_theme;
+    if (!original || !ct) return;
+    const { baseMode: _baseMode, ...originalColors } = original;
+    void _baseMode;
+    setDraft((d) =>
+      d && d.general.custom_theme
+        ? {
+            ...d,
+            general: {
+              ...d.general,
+              custom_theme: { ...d.general.custom_theme, colors: originalColors },
+            },
+          }
+        : d
+    );
+    syncThemePreview(
+      { ...ct, colors: originalColors },
+      previewBlobUrlRef.current ?? undefined,
+    );
   };
 
   const updateEditor = (
@@ -574,6 +668,24 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                               };
                               syncThemePreview(previewCt, previewImageUrl ?? undefined);
                             }}
+                            onColorChange={(c) => {
+                              // 色板变化：rederiveColors 重算 12 色 → 更新 previewColors → 同步主界面预览
+                              const newColors: ExtractedColors = {
+                                ...rederiveColors(c, previewColors.baseMode),
+                                baseMode: previewColors.baseMode,
+                              };
+                              setPreviewColors(newColors);
+                              const draftCt = draft?.general.custom_theme;
+                              const previewCt: CustomThemeConfig = {
+                                image_file: "__preview__",
+                                colors: { ...newColors },
+                                base_mode: newColors.baseMode,
+                                panel_alpha: draftCt?.panel_alpha ?? 82,
+                                editor_alpha: draftCt?.editor_alpha ?? 92,
+                                mask_opacity: draftCt?.mask_opacity ?? 20,
+                              };
+                              syncThemePreview(previewCt, previewImageUrl ?? undefined);
+                            }}
                             onCancel={handleCancelPreview}
                           />
                         )}
@@ -625,6 +737,20 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                                 }
                               }}
                             />
+                            <CustomThemeColorPicker
+                              bg={draft.general.custom_theme.colors.bg}
+                              panel_bg={draft.general.custom_theme.colors.panel_bg}
+                              primary={draft.general.custom_theme.colors.primary}
+                              text={draft.general.custom_theme.colors.text}
+                              border={draft.general.custom_theme.colors.border}
+                              onChange={handleColorChange}
+                            />
+                            <Button
+                              variant="compact"
+                              onClick={handleResetColors}
+                            >
+                              {t("settings.resetColors")}
+                            </Button>
                             <Button
                               variant="compact"
                               onClick={() => void handleImportImage()}
@@ -1103,14 +1229,14 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         {t("settings.shortcutKey")}
                       </div>
                     </div>
-                    {SHORTCUTS.map((s, i) => (
+                    {getShortcuts(isMac).map((s, i) => (
                       <div className="shortcut-row" key={i}>
                         <div className="shortcut-cell">
                           {t(SHORTCUT_CATEGORY_KEY[s.category])}
                         </div>
                         <div className="shortcut-cell">{t(s.action)}</div>
                         <div className="shortcut-cell shortcut-key">
-                          <kbd>{isMac ? s.keys : s.keys.replace(/\bCmd\b/g, "Ctrl")}</kbd>
+                          <kbd>{s.keys}</kbd>
                         </div>
                       </div>
                     ))}

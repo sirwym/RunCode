@@ -48,6 +48,7 @@
   --space-lg: 16px;
 
   /* 尺寸 */
+  --titlebar-height: 32px;
   --tabbar-height: 32px;
   --statusbar-merged-height: 32px;
 
@@ -195,9 +196,12 @@ body::before {
 }
 
 /* 内容层在遮罩层之上 */
+/* z-index 必须高于插件装饰根元素(2147483000)，否则 .titlebar 的 z-index 被困在此层叠上下文内 */
+/* pointer-events: none 让标题栏空白区域事件穿透到插件拖拽层；子元素按需恢复 auto */
 #root {
   position: relative;
-  z-index: 1;
+  z-index: 2147483001;
+  pointer-events: none;
 }
 
 /* ============== 主布局 Grid ============== */
@@ -206,21 +210,29 @@ body::before {
   height: 100vh;
   width: 100vw;
   grid-template-columns: 1fr;
-  grid-template-rows: var(--tabbar-height) 1fr var(--statusbar-merged-height);
+  grid-template-rows: var(--titlebar-height) var(--tabbar-height) 1fr var(--statusbar-merged-height);
   grid-template-areas:
+    "titlebar"
     "tabbar"
     "panels"
     "statusbar";
+  pointer-events: none; /* 让标题栏空白区域事件穿透到插件拖拽层 */
 }
 
+.app-layout > .titlebar {
+  grid-area: titlebar;
+}
 .app-layout > .tab-bar {
   grid-area: tabbar;
+  pointer-events: auto;
 }
 .app-layout > .app-panels {
   grid-area: panels;
+  pointer-events: auto;
 }
 .app-layout > .status-bar {
   grid-area: statusbar;
+  pointer-events: auto;
 }
 
 /* PanelGroup 容器（react-resizable-panels） */
@@ -279,6 +291,82 @@ body::before {
 
 .panel-resize-handle.collapsed:hover {
   background: var(--border);
+}
+
+/* ============== 自定义标题栏 ============== */
+/* 插件装饰根元素背景：与标题栏一致，透过 .titlebar 的透明 padding 区域显示 */
+[data-tauri-plugin-decoration-root] {
+  background-color: var(--panel-bg);
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: var(--titlebar-height);
+  background-color: var(--panel-bg);
+  background-clip: content-box; /* 右侧 padding 区域透明，露出插件控制按钮 */
+  border-bottom: 1px solid var(--border);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  padding-right: max(0px, var(--tauri-plugin-decoration-right-clearance, 0px));
+  padding-left: max(0px, var(--tauri-plugin-decoration-left-clearance, 0px));
+  position: relative;
+  z-index: 2147483001; /* 高于插件装饰根元素(2147483000)，确保菜单可点击 */
+}
+
+.titlebar-menus {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  pointer-events: auto;
+}
+
+.titlebar-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: default;
+  border-radius: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.titlebar-menu-trigger:hover,
+.titlebar-menu-trigger[data-state="open"] {
+  background-color: var(--panel-bg-alt);
+  color: var(--text);
+}
+
+.titlebar-menu-content {
+  min-width: 180px;
+}
+
+.menu-shortcut {
+  margin-left: auto;
+  padding-left: 24px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.titlebar-title {
+  flex: 1 1 auto;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0 8px;
 }
 
 /* ============== 标签栏 ============== */
@@ -676,6 +764,11 @@ body::before {
 
 .terminal-container .xterm-viewport {
   background-color: transparent !important;
+  /* 隐藏原生滚动条，由 xterm 叠加滚动条按需显示（内容超出时淡入，闲置淡出） */
+  scrollbar-width: none;
+}
+.terminal-container .xterm-viewport::-webkit-scrollbar {
+  display: none;
 }
 
 /* ============== 编译错误行高亮 ============== */

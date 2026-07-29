@@ -7,6 +7,7 @@ import {
   adjustLightness,
   kMeans,
   extractThemeColors,
+  rederiveColors,
 } from "./colorExtract";
 
 /** 构造纯色 RGBA 数据（4x4 像素） */
@@ -244,6 +245,77 @@ describe("colorExtract", () => {
       expect(colors.baseMode).toBe("dark");
       expect(colors.bg).toMatch(/^#[0-9a-f]{6}$/);
       expect(colors.text).toBe("#fafafa");
+    });
+  });
+
+  describe("rederiveColors", () => {
+    const darkEditable = {
+      bg: "#1e1e2e",
+      panel_bg: "#181825",
+      text: "#fafafa",
+      border: "#45475a",
+      primary: "#3b65b8",
+    };
+
+    it("5 个可编辑色原样保留", () => {
+      const result = rederiveColors(darkEditable, "dark");
+      expect(result.bg).toBe("#1e1e2e");
+      expect(result.panel_bg).toBe("#181825");
+      expect(result.text).toBe("#fafafa");
+      expect(result.border).toBe("#45475a");
+      expect(result.primary).toBe("#3b65b8");
+    });
+
+    it("dark 模式：bg_terminal = bg", () => {
+      const result = rederiveColors(darkEditable, "dark");
+      expect(result.bg_terminal).toBe("#1e1e2e");
+    });
+
+    it("dark 模式：text_muted 为 #a3a3a3", () => {
+      const result = rederiveColors(darkEditable, "dark");
+      expect(result.text_muted).toBe("#a3a3a3");
+    });
+
+    it("light 模式：text_muted 为 #737373", () => {
+      const lightEditable = {
+        bg: "#ffffff",
+        panel_bg: "#f5f5f5",
+        text: "#0a0a0a",
+        border: "#d4d4d4",
+        primary: "#365eaa",
+      };
+      const result = rederiveColors(lightEditable, "light");
+      expect(result.text_muted).toBe("#737373");
+    });
+
+    it("primary_foreground 始终为 #ffffff", () => {
+      const dark = rederiveColors(darkEditable, "dark");
+      const light = rederiveColors({
+        bg: "#ffffff", panel_bg: "#f5f5f5", text: "#0a0a0a",
+        border: "#d4d4d4", primary: "#365eaa",
+      }, "light");
+      expect(dark.primary_foreground).toBe("#ffffff");
+      expect(light.primary_foreground).toBe("#ffffff");
+    });
+
+    it("primary_soft 和 primary_border 从 primary RGB 派生", () => {
+      const result = rederiveColors(darkEditable, "dark");
+      // #3b65b8 → rgb(59, 101, 184)
+      expect(result.primary_soft).toBe("rgba(59, 101, 184, 0.14)");
+      expect(result.primary_border).toBe("rgba(59, 101, 184, 0.40)");
+    });
+
+    it("修改 primary 后 primary_hover 随之变化", () => {
+      const r1 = rederiveColors(darkEditable, "dark");
+      const r2 = rederiveColors({ ...darkEditable, primary: "#ff0000" }, "dark");
+      expect(r1.primary_hover).not.toBe(r2.primary_hover);
+      expect(r2.primary_hover).not.toBe("#ff0000");
+    });
+
+    it("修改 panel_bg 后 panel_bg_alt 随之变化", () => {
+      const r1 = rederiveColors(darkEditable, "dark");
+      const r2 = rederiveColors({ ...darkEditable, panel_bg: "#ff0000" }, "dark");
+      expect(r1.panel_bg_alt).not.toBe(r2.panel_bg_alt);
     });
   });
 });

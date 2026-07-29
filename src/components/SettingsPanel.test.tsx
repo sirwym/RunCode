@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, within, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { SHORTCUTS, SHORTCUT_CATEGORY_KEY, default as SettingsPanel } from "./SettingsPanel";
+import { getShortcuts, SHORTCUT_DEFINITIONS, SHORTCUT_CATEGORY_KEY, default as SettingsPanel } from "./SettingsPanel";
 import { zh } from "../locales/zh";
 import { en } from "../locales/en";
 import { useI18n } from "../hooks/useI18n";
@@ -133,20 +133,19 @@ function resetStores(settings: AppSettings) {
   });
 }
 
-describe("SHORTCUTS 数据完整性", () => {
-  it("应有 17 项快捷键", () => {
-    expect(SHORTCUTS).toHaveLength(17);
-  });
+describe("getShortcuts 平台筛选", () => {
+  const mac = getShortcuts(true);
+  const win = getShortcuts(false);
 
   it("每项的 action key 在 zh 与 en 中都存在", () => {
-    for (const s of SHORTCUTS) {
+    for (const s of SHORTCUT_DEFINITIONS) {
       expect(getByPath(zh, s.action), `zh 缺少 ${s.action}`).toBeTypeOf("string");
       expect(getByPath(en, s.action), `en 缺少 ${s.action}`).toBeTypeOf("string");
     }
   });
 
   it("每项的 category 在 SHORTCUT_CATEGORY_KEY 中有映射", () => {
-    for (const s of SHORTCUTS) {
+    for (const s of SHORTCUT_DEFINITIONS) {
       expect(SHORTCUT_CATEGORY_KEY[s.category], `缺少 category 映射: ${s.category}`).toBeDefined();
     }
   });
@@ -158,25 +157,83 @@ describe("SHORTCUTS 数据完整性", () => {
     }
   });
 
-  it("keys 不为空且唯一", () => {
-    const keys = SHORTCUTS.map((s) => s.keys);
-    for (const k of keys) {
-      expect(k.length).toBeGreaterThan(0);
-    }
-    // 唯一性（允许同一按键出现在不同上下文，但这里数据应唯一）
+  it("包含新增的 7 个命令（撤销/重做/剪切/复制/粘贴/全选/切换开发人员工具）", () => {
+    const actions = SHORTCUT_DEFINITIONS.map((s) => s.action);
+    expect(actions).toContain("menu.undo");
+    expect(actions).toContain("menu.redo");
+    expect(actions).toContain("menu.cut");
+    expect(actions).toContain("menu.copy");
+    expect(actions).toContain("menu.paste");
+    expect(actions).toContain("menu.selectAll");
+    expect(actions).toContain("menu.toggleDevtools");
+  });
+
+  it("Windows redo 为 Ctrl+Y", () => {
+    const redo = win.find((s) => s.action === "menu.redo");
+    expect(redo?.keys).toBe("Ctrl+Y");
+  });
+
+  it("macOS redo 为 Cmd+Shift+Z", () => {
+    const redo = mac.find((s) => s.action === "menu.redo");
+    expect(redo?.keys).toBe("Cmd+Shift+Z");
+  });
+
+  it("Windows DevTools 为 Ctrl+Shift+I", () => {
+    const dev = win.find((s) => s.action === "menu.toggleDevtools");
+    expect(dev?.keys).toBe("Ctrl+Shift+I");
+  });
+
+  it("macOS DevTools 为 Cmd+Alt+I", () => {
+    const dev = mac.find((s) => s.action === "menu.toggleDevtools");
+    expect(dev?.keys).toBe("Cmd+Alt+I");
+  });
+
+  it("Windows Find Next 不显示（未由 App 接管，不显示 Ctrl+G）", () => {
+    const findNext = win.find((s) => s.action === "menu.findNext");
+    expect(findNext).toBeUndefined();
+  });
+
+  it("macOS Find Next 为 Cmd+G", () => {
+    const findNext = mac.find((s) => s.action === "menu.findNext");
+    expect(findNext?.keys).toBe("Cmd+G");
+  });
+
+  it("Windows Ctrl+G 唯一对应跳转行", () => {
+    const ctrlG = win.filter((s) => s.keys === "Ctrl+G");
+    expect(ctrlG).toHaveLength(1);
+    expect(ctrlG[0].action).toBe("menu.gotoLine");
+  });
+
+  it("macOS 跳转行也为 Ctrl+G（与 Find Next 的 Cmd+G 不冲突）", () => {
+    const gotoLine = mac.find((s) => s.action === "menu.gotoLine");
+    expect(gotoLine?.keys).toBe("Ctrl+G");
+  });
+
+  it("Windows 显示的快捷键不重复", () => {
+    const keys = win.map((s) => s.keys);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("不包含布局切换项（用户确认点 4：布局切换无快捷键）", () => {
-    const actions = SHORTCUTS.map((s) => s.action);
+  it("macOS 显示的快捷键不重复", () => {
+    const keys = mac.map((s) => s.keys);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("不包含布局切换项（布局切换无快捷键）", () => {
+    const actions = SHORTCUT_DEFINITIONS.map((s) => s.action);
     expect(actions).not.toContain("menu.layoutHorizontal");
     expect(actions).not.toContain("menu.layoutVertical");
   });
 
-  it("包含 Cmd+\\（用户确认点 4：隐藏面板有快捷键）", () => {
-    const item = SHORTCUTS.find((s) => s.action === "menu.togglePanel");
-    expect(item, "缺少 menu.togglePanel 项").toBeDefined();
-    expect(item!.keys).toBe("Cmd+\\");
+  it("隐藏面板快捷键：macOS Cmd+\\ / Windows Ctrl+\\", () => {
+    expect(mac.find((s) => s.action === "menu.togglePanel")?.keys).toBe("Cmd+\\");
+    expect(win.find((s) => s.action === "menu.togglePanel")?.keys).toBe("Ctrl+\\");
+  });
+
+  it("每项 keys 非空", () => {
+    for (const s of [...mac, ...win]) {
+      expect(s.keys.length).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -226,7 +283,7 @@ describe("SettingsPanel 快捷键 tab 渲染", () => {
     expect(tableScope.getByText(zh.settings.shortcutKey)).toBeInTheDocument();
   });
 
-  it("切换到快捷键 tab 后渲染 17 行数据", async () => {
+  it("切换到快捷键 tab 后渲染当前平台的快捷键", async () => {
     const user = userEvent.setup();
     render(<SettingsPanel open={true} onClose={() => {}} />);
 
@@ -236,13 +293,12 @@ describe("SettingsPanel 快捷键 tab 渲染", () => {
     expect(table, "shortcuts 表格未渲染").not.toBeNull();
     const tableScope = within(table as HTMLElement);
 
-    // 每个快捷键的 keys 都应在表格中（用 kbd 文本查找）
-    // jsdom 环境下 navigator.platform 非 Mac，渲染时会将 Cmd 转为 Ctrl
-    // 注意 Cmd+G 转换后与 Ctrl+G 撞重，需用 getAllByText
+    // jsdom 环境下 navigator.platform 非 Mac，渲染 Windows 快捷键
+    // 渲染的 keys 已是平台专属值，无需再替换 Cmd→Ctrl
     const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
-    for (const s of SHORTCUTS) {
-      const expected = isMac ? s.keys : s.keys.replace(/\bCmd\b/g, "Ctrl");
-      expect(tableScope.getAllByText(expected).length).toBeGreaterThan(0);
+    const rendered = getShortcuts(isMac);
+    for (const s of rendered) {
+      expect(tableScope.getAllByText(s.keys).length).toBeGreaterThan(0);
     }
   });
 
@@ -257,7 +313,8 @@ describe("SettingsPanel 快捷键 tab 渲染", () => {
     expect(table, "shortcuts 表格未渲染").not.toBeNull();
     const tableScope = within(table as HTMLElement);
 
-    for (const s of SHORTCUTS) {
+    const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+    for (const s of getShortcuts(isMac)) {
       const expected = getByPath(zh, s.action);
       expect(tableScope.getByText(expected as string), `action ${s.action} 文案未渲染`).toBeInTheDocument();
     }
@@ -1136,5 +1193,216 @@ describe("SettingsPanel 主题实时预览", () => {
     // 预览仍为 null，settings 未变（取消不保存）
     expect(useSettings.getState().themePreview).toBeNull();
     expect(useSettings.getState().settings?.general.theme).toBe("custom");
+  });
+});
+
+describe("SettingsPanel 自定义色板与重置", () => {
+  beforeAll(() => {
+    if (!window.matchMedia) {
+      window.matchMedia = ((q: string) => ({
+        matches: false,
+        media: q,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia;
+    }
+  });
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+    openDialogMock.mockReset();
+    resetStores(makeSettings());
+  });
+
+  // 辅助：构造带 custom_theme 的 settings
+  function makeCustomSettings(): AppSettings {
+    const s = makeSettings();
+    s.general.theme = "custom";
+    s.general.custom_theme = {
+      image_file: "persisted.png",
+      colors: {
+        bg: "#1e1e2e",
+        panel_bg: "#181825",
+        panel_bg_alt: "#11111b",
+        text: "#fafafa",
+        text_muted: "#a3a3a3",
+        border: "#45475a",
+        primary: "#3b65b8",
+        primary_hover: "#4a78c9",
+        primary_foreground: "#ffffff",
+        primary_soft: "rgba(59,101,184,0.14)",
+        primary_border: "rgba(59,101,184,0.40)",
+        bg_terminal: "#1e1e2e",
+      },
+      base_mode: "dark",
+      panel_alpha: 82,
+      editor_alpha: 92,
+      mask_opacity: 20,
+    };
+    return s;
+  }
+
+  function setupI18n() {
+    useI18n.setState({
+      locale: "zh",
+      t: (key: string, params?: Record<string, string | number>) => {
+        let v = getByPath(zh, key);
+        if (typeof v !== "string") return key;
+        if (params) {
+          for (const [k, p] of Object.entries(params)) {
+            v = (v as string).replace(new RegExp(`\\{${k}\\}`, "g"), String(p));
+          }
+        }
+        return v as string;
+      },
+      setLocale: vi.fn(),
+    });
+  }
+
+  it("State C 渲染色板，显示 5 个颜色输入", async () => {
+    const s = makeCustomSettings();
+    useSettings.setState({ settings: s });
+    setupI18n();
+
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    // 等待 State C 渲染（滑块出现意味着 State C 已渲染）
+    await screen.findByDisplayValue("82");
+
+    // 应有 5 个 color input（bg / panel_bg / primary / text / border）
+    const colorInputs = document.querySelectorAll('input[type="color"]');
+    expect(colorInputs).toHaveLength(5);
+
+    // 第 3 个（index 2）是 primary，值应与 draft 一致
+    expect((colorInputs[2] as HTMLInputElement).value).toBe("#3b65b8");
+  });
+
+  it("State C 修改 primary 色后，draft.colors 和 themePreview 同步更新", async () => {
+    const s = makeCustomSettings();
+    useSettings.setState({ settings: s });
+    setupI18n();
+
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    await screen.findByDisplayValue("82");
+
+    const colorInputs = document.querySelectorAll('input[type="color"]');
+    // 修改 primary 色（index 2）为 #ff0000
+    fireEvent.change(colorInputs[2], { target: { value: "#ff0000" } });
+
+    // themePreview 应同步更新
+    const preview = useSettings.getState().themePreview;
+    expect(preview).not.toBeNull();
+    expect(preview?.customTheme.colors.primary).toBe("#ff0000");
+    // 派生色 primary_soft 应基于新 primary 重算
+    expect(preview?.customTheme.colors.primary_soft).toContain("rgba(255, 0, 0");
+  });
+
+  it("State C 点击重置按钮恢复原始提取色", async () => {
+    const s = makeCustomSettings();
+    useSettings.setState({ settings: s });
+    setupI18n();
+
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    await screen.findByDisplayValue("82");
+
+    // 修改 primary 色
+    const colorInputs = document.querySelectorAll('input[type="color"]');
+    fireEvent.change(colorInputs[2], { target: { value: "#ff0000" } });
+    expect(useSettings.getState().themePreview?.customTheme.colors.primary).toBe("#ff0000");
+
+    // 点击重置
+    await userEvent.setup().click(screen.getByText(zh.settings.resetColors));
+
+    // primary 应恢复为原始值 #3b65b8
+    const preview = useSettings.getState().themePreview;
+    expect(preview?.customTheme.colors.primary).toBe("#3b65b8");
+    // primary_soft 恢复为原始格式（持久化数据中无空格）
+    expect(preview?.customTheme.colors.primary_soft).toContain("59,101,184");
+  });
+
+  it("State A（未导入）不渲染色板和重置按钮", async () => {
+    const s = makeSettings();
+    s.general.theme = "custom";
+    // 无 custom_theme，无 previewColors → State A
+    useSettings.setState({ settings: s });
+    setupI18n();
+
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    // State A 只有"导入图片"按钮，无色板
+    expect(screen.getByText(zh.settings.importImage)).toBeInTheDocument();
+    expect(screen.queryByText(zh.settings.resetColors)).not.toBeInTheDocument();
+    expect(document.querySelectorAll('input[type="color"]')).toHaveLength(0);
+  });
+
+  it("State B 修改颜色后 previewColors 和 themePreview 同步更新", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    // 切换到 custom 主题
+    const themeTrigger = document.getElementById("set-theme") as HTMLButtonElement;
+    await user.click(themeTrigger);
+    await user.click(screen.getByText(zh.settings.themeCustom));
+
+    // mock 导入图片
+    openDialogMock.mockResolvedValue("/fake/path/image.png");
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "read_file_bytes") return Promise.resolve([1, 2, 3, 4]);
+      if (cmd === "save_custom_theme_image") return Promise.resolve("new-uuid.png");
+      return Promise.resolve(undefined);
+    });
+
+    await user.click(screen.getByText(zh.settings.importImage));
+
+    // 等待 State B 渲染（应用按钮出现）
+    await screen.findByText(zh.settings.applyTheme);
+
+    // State B 应有色板（5 个 color input）
+    const colorInputs = document.querySelectorAll('input[type="color"]');
+    expect(colorInputs).toHaveLength(5);
+
+    // 修改 primary 色（index 2）为 #ff0000
+    fireEvent.change(colorInputs[2], { target: { value: "#ff0000" } });
+
+    // themePreview 应同步更新
+    const preview = useSettings.getState().themePreview;
+    expect(preview).not.toBeNull();
+    expect(preview?.customTheme.colors.primary).toBe("#ff0000");
+    expect(preview?.customTheme.colors.primary_soft).toContain("rgba(255, 0, 0");
+  });
+
+  it("State C 修改颜色后保存，持久化色值正确", async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const s = makeCustomSettings();
+    useSettings.setState({ settings: s, save: saveMock });
+    setupI18n();
+
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    await screen.findByDisplayValue("82");
+
+    // 修改 primary 色为 #ff0000
+    const colorInputs = document.querySelectorAll('input[type="color"]');
+    fireEvent.change(colorInputs[2], { target: { value: "#ff0000" } });
+
+    // 保存
+    await user.click(screen.getByText(zh.settings.save));
+
+    await vi.waitFor(() => {
+      expect(saveMock).toHaveBeenCalled();
+    });
+
+    const saved = saveMock.mock.calls[0][0] as AppSettings;
+    expect(saved.general.custom_theme?.colors.primary).toBe("#ff0000");
+    // 派生色也应基于新 primary 重算
+    expect(saved.general.custom_theme?.colors.primary_soft).toContain("rgba(255, 0, 0");
   });
 });
