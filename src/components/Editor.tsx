@@ -8,7 +8,7 @@ import {
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor as MonacoEditorNS, languages as MonacoLanguagesNS } from "monaco-editor";
 import { invoke } from "@tauri-apps/api/core";
-import type { EditorSettings, CompileError } from "../types";
+import type { EditorSettings, CompileError, CustomThemeColors } from "../types";
 import { useTabs } from "../hooks/useTabs";
 import { CPP_KEYWORDS_ALL, type KeywordKind } from "../monaco/cppKeywords";
 
@@ -44,15 +44,52 @@ export const RUNCODE_LIGHT_COLORS: Record<string, string> = {
   "editorBracketMatch.border": "#365eaa",
 };
 
-// 持久化 settings.editor.theme → 渲染层 Monaco 主题映射
-// - vs-dark → runcode-dark（继承 vs-dark，仅覆盖光标/选区/当前行/焦点）
-// - vs      → runcode-light（继承 vs，仅覆盖上述色）
-// - hc-black 保留原样（高对比度主题不品牌化）
-export function mapMonacoTheme(persisted: string | undefined, fallback: "dark" | "light" | undefined): string {
-  if (persisted === "hc-black") return "hc-black";
-  if (persisted === "vs") return "runcode-light";
-  if (persisted === "vs-dark") return "runcode-dark";
-  return fallback === "light" ? "runcode-light" : "runcode-dark";
+// 渲染层 Monaco 主题映射：完全由 effectiveTheme（general.theme 派生）决定
+// - dark   → runcode-dark（继承 vs-dark，仅覆盖光标/选区/当前行/焦点）
+// - light  → runcode-light（继承 vs，仅覆盖上述色）
+// - custom → runcode-custom（运行时 defineTheme，颜色取自 custom_theme.colors）
+// settings.editor.theme 字段已废弃（保留 schema 但渲染层不读）；hc-black 不再暴露给用户
+export function mapMonacoTheme(
+  theme: "dark" | "light" | "custom" | undefined,
+  customColors?: CustomThemeColors,
+): string {
+  if (theme === "light") return "runcode-light";
+  if (theme === "custom" && customColors) return "runcode-custom";
+  return "runcode-dark";
+}
+
+// 由 custom_theme.colors 构造 Monaco defineTheme 的 colors 字段
+// editor.background 必须为透明色（#00000000），editorAlpha 只控制外层 .editor-container
+// 透明度，不得在 Monaco 主题内重复应用（避免 0.92×0.92=0.9936 重复合成）
+// 半透明选区/当前行色用 8 位 HEX（#RRGGBBAA）拼接，因 Monaco 不接受 rgba()
+// 与 RUNCODE_DARK_COLORS / RUNCODE_LIGHT_COLORS 同构，仅颜色值替换
+// baseMode 决定 Monaco base 主题（vs/vs-dark），禁止用 bg_terminal === "#ffffff" 推断
+export function buildCustomMonacoColors(
+  c: CustomThemeColors,
+): Record<string, string> {
+  const primaryHex = c.primary.toLowerCase();
+  return {
+    "editor.background": "#00000000",
+    "editor.foreground": c.text,
+    "editorCursor.foreground": c.primary,
+    // 选区/当前行半透明：primary HEX + alpha（4D=30%, 26=15%, 33=20%, 1A=10%）
+    "editor.selectionBackground": `${primaryHex}4D`,
+    "editor.inactiveSelectionBackground": `${primaryHex}26`,
+    "editor.selectionHighlightBackground": `${primaryHex}33`,
+    "editor.lineHighlightBackground": `${primaryHex}1A`,
+    "editor.lineHighlightBorder": "#00000000",
+    "editor.focusBorder": c.primary,
+    "editorWidget.focusBorder": c.primary,
+    "editorSuggestWidget.focusBorder": c.primary,
+    "inputOption.activeBorder": c.primary,
+    "editorBracketMatch.border": c.primary,
+  };
+}
+
+// 由 baseMode 决定 Monaco 继承主题：light → "vs"，dark → "vs-dark"
+// 禁止用 bg_terminal === "#ffffff" 推断（浅色图可能提取出 #f3f7f8 等非纯白）
+export function monacoBaseFromMode(baseMode: "light" | "dark" | undefined): "vs" | "vs-dark" {
+  return baseMode === "light" ? "vs" : "vs-dark";
 }
 
 // 后端返回的符号结构
@@ -81,12 +118,16 @@ interface EditorPaneProps {
   onCursorPositionChange?: (line: number, col: number) => void;
   /** 编辑器设置（来自 settings.editor） */
   settings?: EditorSettings;
-  /** 软件主题（仅当 settings.theme 未显式指定时作为 fallback） */
-  theme?: "dark" | "light";
+  /** 软件主题（effectiveTheme，由 general.theme 派生） */
+  theme?: "dark" | "light" | "custom";
+  /** 自定义图片主题颜色（仅 theme === "custom" 时使用） */
+  customColors?: CustomThemeColors;
+  /** 自定义主题 base_mode（仅 theme === "custom" 时使用，决定 Monaco 继承 vs/vs-dark） */
+  baseMode?: "light" | "dark";
 }
 
 const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane(
-  { onContentChange, onRun, onCursorPositionChange, settings, theme },
+  { onContentChange, onRun, onCursorPositionChange, settings, theme, customColors, baseMode },
   ref
 ) {
   const editorRef = useRef<MonacoEditorNS.IStandaloneCodeEditor | null>(null);
@@ -97,12 +138,22 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   const completionDisposablesRef = useRef<Array<{ dispose: () => void }>>([]);
   // 编译错误装饰 ID（deltaDecorations 增量更新）
   const decorationsRef = useRef<string[]>([]);
+  // 同步最新 Monaco 主题给 onMount 闭包使用（避免闭包陈旧）
+  const monacoThemeRef = useRef<string>("runcode-dark");
   // 用 ref 持有最新 onContentChange，避免 model.onDidChangeContent 闭包陈旧
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
   // 用 ref 持有最新 onCursorPositionChange
   const onCursorPositionChangeRef = useRef(onCursorPositionChange);
   onCursorPositionChangeRef.current = onCursorPositionChange;
+  // 用 ref 持有最新 customColors/baseMode，供 onMount 闭包读取最新值
+  // 修复 Monaco 初始化竞态：无论 customColors 在挂载前还是挂载后到达，
+  // onMount 都能用最新值定义 runcode-custom，避免占位深色主题永久存留
+  // editorAlpha 不再经 Monaco 主题控制（editor.background 始终透明），无需 ref
+  const customColorsRef = useRef(customColors);
+  customColorsRef.current = customColors;
+  const baseModeRef = useRef(baseMode);
+  baseModeRef.current = baseMode;
 
   useImperativeHandle(
     ref,
@@ -195,6 +246,29 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
       rules: [],
       colors: RUNCODE_LIGHT_COLORS,
     });
+    // 定义 runcode-custom：用 ref 中的最新 customColors/baseMode
+    // 修复 Monaco 初始化竞态：无论 customColors 在挂载前还是挂载后到达，
+    // 首次 onMount 都用实际值定义主题，不让深色占位主题在重启路径永久存留
+    const cc = customColorsRef.current;
+    if (cc) {
+      monaco.editor.defineTheme("runcode-custom", {
+        base: monacoBaseFromMode(baseModeRef.current),
+        inherit: true,
+        rules: [],
+        colors: buildCustomMonacoColors(cc),
+      });
+    } else {
+      // customColors 未到达时用深色占位，后续 useEffect 覆盖
+      monaco.editor.defineTheme("runcode-custom", {
+        base: "vs-dark",
+        inherit: true,
+        rules: [],
+        colors: RUNCODE_DARK_COLORS,
+      });
+    }
+
+    // 修复 Bug 1：defineTheme 后立即应用，避免首次挂载回退到默认 vs（浅色）
+    monaco.editor.setTheme(monacoThemeRef.current);
 
     // 注册 Cmd+Enter / Ctrl+Enter 触发运行
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
@@ -303,9 +377,33 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
     completionDisposablesRef.current.push(symbolDisposable);
   }, [onRun]);
 
-  // 计算 Monaco 主题：持久化值经渲染层映射为 runcode-* 继承主题
-  // settings.editor.theme 仍保存 vs-dark / vs / hc-black，避免设置迁移
-  const monacoTheme = mapMonacoTheme(settings?.theme, theme);
+  // 计算 Monaco 主题：由 effectiveTheme（general.theme 派生）决定
+  // settings.editor.theme 已废弃，渲染层不再读取
+  const monacoTheme = mapMonacoTheme(theme, customColors);
+  monacoThemeRef.current = monacoTheme;
+
+  // customColors / baseMode 变化时，运行时 defineTheme("runcode-custom")
+  // editor.background 始终为 #00000000（透明），editorAlpha 不再经 Monaco 主题控制
+  // 用 JSON.stringify 作为依赖键，避免 customColors 对象引用变化导致无限循环
+  // baseMode 决定 Monaco 继承主题（vs/vs-dark），禁止用 bg_terminal === "#ffffff" 推断
+  const customColorsKey = customColors
+    ? JSON.stringify(customColors) + "|" + (baseMode ?? "dark")
+    : "";
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !customColors) return;
+    monaco.editor.defineTheme("runcode-custom", {
+      base: monacoBaseFromMode(baseMode),
+      inherit: true,
+      rules: [],
+      colors: buildCustomMonacoColors(customColors),
+    });
+    // 若当前正是 custom 主题，立即应用（切换中实时生效）
+    if (monacoThemeRef.current === "runcode-custom") {
+      monaco.editor.setTheme("runcode-custom");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customColorsKey]);
 
   // settings 变化时实时更新 Monaco 选项
   useEffect(() => {

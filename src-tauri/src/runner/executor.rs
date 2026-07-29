@@ -9,10 +9,10 @@ use crate::runner::limits::ResourceLimits;
 
 #[cfg(unix)]
 #[path = "unix.rs"]
-mod unix;
+pub mod unix;
 #[cfg(windows)]
 #[path = "windows.rs"]
-mod windows;
+pub mod windows;
 
 #[cfg(unix)]
 use unix::run_with_limits as run_with_limits_impl;
@@ -41,8 +41,8 @@ pub struct RunOutput {
     pub killed_by: Option<KillReason>,
     pub truncated: bool,
     /// 子进程内存峰值（KB）
-    /// - macOS: ru_maxrss 单位是字节，运行时转 KB
-    /// - Linux: ru_maxrss 已是 KB
+    /// - macOS: proc_pid_rusage 轮询 ri_resident_size 取 max，精确到具体 PID
+    /// - Linux: RUSAGE_CHILDREN 差值法（已知不可靠，不在正式支持范围）
     /// - Windows: GetProcessMemoryInfo 的 PeakWorkingSetSize，轮询采集
     /// 超时/取消分支未完成 wait，记为 0
     pub max_rss_kb: u64,

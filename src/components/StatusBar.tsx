@@ -22,6 +22,7 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
   const status = useRunManager((s) => s.status);
   const stop = useRunManager((s) => s.stop);
   const runResult = useRunManager((s) => s.runResult);
+  const ptyExitInfo = useRunManager((s) => s.ptyExitInfo);
   const error = useRunManager((s) => s.error);
   const settings = useSettings((s) => s.settings);
 
@@ -67,6 +68,20 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
         <span className="status-item status-item-low-priority">
           <span className="status-label">{t("status.duration")}:</span>
           {runResult.duration_ms} ms
+        </span>
+      )}
+
+      {!runResult && ptyExitInfo && ptyExitInfo.durationMs !== null && (
+        <span className="status-item status-item-low-priority">
+          <span className="status-label">{t("status.duration")}:</span>
+          {ptyExitInfo.durationMs} ms
+        </span>
+      )}
+
+      {!runResult && ptyExitInfo && ptyExitInfo.maxRssKb !== null && ptyExitInfo.maxRssKb > 0 && (
+        <span className="status-item status-item-low-priority">
+          <span className="status-label">{t("status.memory")}:</span>
+          {formatMem(ptyExitInfo.maxRssKb)}
         </span>
       )}
 

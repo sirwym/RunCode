@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tempfile::TempDir;
 use tokio::sync::oneshot;
 
-use crate::commands::compile_run::{compile_only, load_config};
+use crate::commands::compile_run::{compile_only, load_config, CompileScenario};
 use crate::error::AppError;
 use crate::pty::{PtyManager, PtySession};
 use crate::run_manager::{RunKind, RunManager};
@@ -27,6 +27,8 @@ struct PtyExitEvent {
     exit_code: Option<i32>,
     /// "cancelled" / null（PTY 无墙钟超时）
     killed_by: Option<&'static str>,
+    /// 进程内存峰值（KB），无法获取时为 0
+    max_rss_kb: u64,
 }
 
 /// start_pty_run 的返回值。
@@ -35,8 +37,13 @@ struct PtyExitEvent {
 #[derive(Serialize, Clone)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum StartPtyResult {
-    /// 编译成功，PTY 已创建，后续输出/退出通过 pty_output / pty_exit 事件推送
-    Success { run_id: String },
+    /// 编译成功，PTY 已创建，后续输出/退出通过 pty_output / pty_exit 事件推送。
+    /// compile_stderr 可能含编译警告，前端在 PTY 交互输出前显示（不阻止程序启动）。
+    Success {
+        run_id: String,
+        compile_stdout: String,
+        compile_stderr: String,
+    },
     /// 编译失败，前端直接拿 stderr 显示 + 解析错误行
     CompileFailed { run_id: String, stderr: String },
 }
@@ -106,8 +113,8 @@ async fn start_pty_run_inner(
     let (_settings, config, limits) = load_config(app)?;
     let work_dir = TempDir::new()?;
 
-    let exe_path = match compile_only(&code, &config, work_dir.path(), limits, Some(cancel_rx)).await? {
-        crate::commands::compile_run::CompileResult::Success(p) => p,
+    let (exe_path, compile_stdout, compile_stderr) = match compile_only(&code, &config, CompileScenario::Run, work_dir.path(), limits, Some(cancel_rx)).await? {
+        crate::commands::compile_run::CompileResult::Success { exe_path, stdout, stderr } => (exe_path, stdout, stderr),
         crate::commands::compile_run::CompileResult::Failed {
             stderr, ..
         } => {
@@ -193,7 +200,109 @@ async fn start_pty_run_inner(
     let run_id_waiter = run_id.clone();
     std::thread::spawn(move || {
         let mut child = child;
+
+        // macOS：轮询 proc_pid_rusage 按 PID 采集内存峰值（与 Windows 模式一致）
+        #[cfg(target_os = "macos")]
+        let pid_macos = pid.unwrap_or(0) as i32;
+        #[cfg(target_os = "macos")]
+        let max_rss_arc = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+        #[cfg(target_os = "macos")]
+        let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        #[cfg(target_os = "macos")]
+        {
+            let max_rss_clone = max_rss_arc.clone();
+            let stop_clone = stop_flag.clone();
+            std::thread::spawn(move || {
+                while !stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(rss) = crate::runner::executor::unix::query_proc_pid_rss_kb(pid_macos) {
+                        if let Ok(mut m) = max_rss_clone.lock() {
+                            if rss > *m {
+                                *m = rss;
+                            }
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                // 进程退出后再查一次（zombie 状态仍可查询）
+                if let Some(rss) = crate::runner::executor::unix::query_proc_pid_rss_kb(pid_macos) {
+                    if let Ok(mut m) = max_rss_clone.lock() {
+                        if rss > *m {
+                            *m = rss;
+                        }
+                    }
+                }
+            });
+        }
+
+        // Linux/其他 Unix：记录 baseline，wait 后查 after，差值即本次运行内存峰值
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let baseline_rss = crate::runner::executor::unix::get_children_rusage_max_rss_kb();
+
+        // Windows：轮询进程内存峰值（进程退出后 OpenProcess 会失败）
+        #[cfg(windows)]
+        let pid_waiter = pid;
+
+        #[cfg(windows)]
+        let max_rss_arc = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+        #[cfg(windows)]
+        let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        #[cfg(windows)]
+        {
+            let max_rss_clone = max_rss_arc.clone();
+            let stop_clone = stop_flag.clone();
+            std::thread::spawn(move || {
+                while !stop_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(pid) = pid_waiter {
+                        if let Some(rss) = crate::runner::executor::windows::query_process_rss_kb(pid) {
+                            if let Ok(mut m) = max_rss_clone.lock() {
+                                if rss > *m {
+                                    *m = rss;
+                                }
+                            }
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            });
+        }
+
         let exit_code = child.wait().ok().map(|s| s.exit_code() as i32);
+
+        #[cfg(target_os = "macos")]
+        {
+            stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            // 给轮询线程一点时间完成最后一次查询再读结果
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        #[cfg(windows)]
+        {
+            stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            // 最后查一次（进程可能刚退出但句柄还活着）
+            if let Some(pid) = pid_waiter {
+                if let Some(rss) = crate::runner::executor::windows::query_process_rss_kb(pid) {
+                    if let Ok(mut m) = max_rss_arc.lock() {
+                        if rss > *m {
+                            *m = rss;
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        let max_rss_kb = max_rss_arc.lock().map(|m| *m).unwrap_or(0);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let max_rss_kb = {
+            let after = crate::runner::executor::unix::get_children_rusage_max_rss_kb();
+            after.saturating_sub(baseline_rss)
+        };
+        #[cfg(windows)]
+        let max_rss_kb = max_rss_arc.lock().map(|m| *m).unwrap_or(0);
+        #[cfg(not(any(unix, windows)))]
+        let max_rss_kb: u64 = 0;
 
         // 限时排空读取线程（见 drain_reader_with_timeout 文档）
         if drain_reader_with_timeout(&reader_handle, Duration::from_millis(500)) {
@@ -206,6 +315,7 @@ async fn start_pty_run_inner(
                 run_id: run_id_waiter.clone(),
                 exit_code,
                 killed_by: None,
+                max_rss_kb,
             },
         );
 
@@ -218,7 +328,11 @@ async fn start_pty_run_inner(
         }
     });
 
-    Ok(StartPtyResult::Success { run_id })
+    Ok(StartPtyResult::Success {
+        run_id,
+        compile_stdout,
+        compile_stderr,
+    })
 }
 
 /// 向 PTY 写入 stdin（用户在终端中输入）
@@ -227,10 +341,16 @@ pub async fn write_pty_stdin(
     run_id: String,
     data: String,
     pty_manager: State<'_, PtyManager>,
+    app: AppHandle,
 ) -> Result<(), AppError> {
     pty_manager
         .write_stdin(&run_id, data.as_bytes())
-        .map_err(|e| AppError::Other { detail: e })
+        .map_err(|e| AppError::Other { detail: e })?;
+    // 首次输入时通知前端重置 PTY 计时起点（只 emit 一次）
+    if pty_manager.mark_first_input(&run_id) {
+        let _ = app.emit("pty_first_input", &run_id);
+    }
+    Ok(())
 }
 
 /// 调整 PTY 大小
@@ -262,13 +382,14 @@ pub async fn stop_pty_run(
     run_manager.complete(&run_id);
     pty_manager.remove(&run_id);
 
-    // 4. 通知前端 PTY 已退出
+    // 4. 通知前端 PTY 已退出（用户取消时不查内存，max_rss_kb=0）
     let _ = app.emit(
         "pty_exit",
         PtyExitEvent {
             run_id,
             exit_code: None,
             killed_by: Some("cancelled"),
+            max_rss_kb: 0,
         },
     );
 
@@ -298,9 +419,13 @@ mod tests {
 
     #[test]
     fn start_pty_result_success_serializes_with_tag() {
-        let r = StartPtyResult::Success { run_id: "abc".into() };
+        let r = StartPtyResult::Success {
+            run_id: "abc".into(),
+            compile_stdout: "out".into(),
+            compile_stderr: "warn".into(),
+        };
         let json = serde_json::to_string(&r).unwrap();
-        assert_eq!(json, r#"{"status":"success","run_id":"abc"}"#);
+        assert_eq!(json, r#"{"status":"success","run_id":"abc","compile_stdout":"out","compile_stderr":"warn"}"#);
     }
 
     #[test]

@@ -13,8 +13,10 @@ export interface AppErrorPayload {
 export type RunStage = "compile_failed" | "ran";
 
 // 与 Rust 端 pty_run.rs StartPtyResult 对应（tag = "status"）
+// success 分支携带 compile_stdout/compile_stderr：编译成功但有 warning 时，
+// 前端在 PTY 交互输出前显示 compile_stderr（黄色），不阻止程序启动。
 export type StartPtyResult =
-  | { status: "success"; run_id: string }
+  | { status: "success"; run_id: string; compile_stdout: string; compile_stderr: string }
   | { status: "compile_failed"; run_id: string; stderr: string };
 
 // g++ 编译错误解析结果（parseGccErrors 产出）
@@ -96,6 +98,8 @@ export interface TestRunResult {
   stage: RunStage;
   compile_stdout: string;
   compile_stderr: string;
+  /** 本次测试编译实际使用的优化级别（运行开始时快照） */
+  used_opt_level: string;
   results: TestCaseResult[];
 }
 
@@ -147,14 +151,50 @@ export interface RuntimeSettings {
 export interface TestSettings {
   fsize_mb: number;
   test_time_limit_ms: number;
+  /** 多样例测试优化级别（默认 O2） */
+  opt_level: string;
 }
 
 // 软件层通用设置（与编辑器/编程语言无关）
 export interface GeneralSettings {
   locale: string;
-  theme: string;            // dark / light / system
+  theme: string;            // dark / light / system / custom
   layout: string;           // horizontal / vertical
   auto_hide_panel: boolean; // 自动隐藏输出面板
+  /** 自定义图片主题配置（仅 theme === "custom" 时存在） */
+  custom_theme?: CustomThemeConfig | null;
+}
+
+// 自定义图片主题提取出的颜色组（与后端 settings.rs CustomThemeColors 对应）
+export interface CustomThemeColors {
+  bg: string;
+  panel_bg: string;
+  panel_bg_alt: string;
+  text: string;
+  text_muted: string;
+  border: string;
+  primary: string;
+  primary_hover: string;
+  primary_foreground: string;
+  primary_soft: string;
+  primary_border: string;
+  bg_terminal: string;
+}
+
+// 自定义图片主题配置（image_file + 提取颜色 + 亮度模式 + 透明度参数）
+export interface CustomThemeConfig {
+  /** 图片在 app_data_dir/custom_themes/ 下的文件名（不含路径） */
+  image_file: string;
+  /** 提取出的颜色组（缓存避免每次重新提取） */
+  colors: CustomThemeColors;
+  /** 亮度模式："dark" / "light"，决定 Monaco base + 语义色基础 */
+  base_mode: "dark" | "light";
+  /** 面板透明度 50~95（百分比整数） */
+  panel_alpha: number;
+  /** 编辑器透明度 70~100（百分比整数） */
+  editor_alpha: number;
+  /** 图片遮罩强度 0~60（百分比整数） */
+  mask_opacity: number;
 }
 
 // 编辑器（Monaco）设置

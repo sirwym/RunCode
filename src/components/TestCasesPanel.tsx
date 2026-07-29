@@ -307,6 +307,11 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
             {result.passed}/{result.total} {t("tests.passed")}
           </span>
         )}
+        {result && result.stage === "ran" && (
+          <span className="test-opt-level-badge">
+            {t("tests.optLevelBadge", { level: result.used_opt_level })}
+          </span>
+        )}
         <span className="testcases-spacer" />
         <label
           className={"strict-toggle" + (strict ? " active" : "")}

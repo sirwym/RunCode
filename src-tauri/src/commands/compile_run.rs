@@ -11,6 +11,15 @@ use crate::run_manager::{RunKind, RunManager};
 use crate::runner::{run_with_limits, KillReason, ResourceLimits};
 use crate::settings::{self, AppSettings};
 
+/// 编译场景：决定使用哪套编译参数
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CompileScenario {
+    /// 快速运行（终端交互 + 普通运行），用 run_args（compiler.opt_level）
+    Run,
+    /// 多样例测试，用 test_args（test.opt_level）
+    Test,
+}
+
 /// 运行阶段标识
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -39,8 +48,12 @@ pub struct RunResult {
 
 /// 编译结果（供 compile_and_run 和 PTY 复用）
 pub enum CompileResult {
-    /// 编译成功，返回可执行文件路径
-    Success(PathBuf),
+    /// 编译成功，返回可执行文件路径 + 编译器输出（可能含 warning）
+    Success {
+        exe_path: PathBuf,
+        stdout: String,
+        stderr: String,
+    },
     /// 编译失败，返回编译器输出
     Failed {
         stdout: String,
@@ -52,10 +65,12 @@ pub enum CompileResult {
 /// 编译 C++ 代码（抽取出来供 compile_and_run 和 PTY 复用）。
 ///
 /// 在 work_dir 中写 main.cpp 并编译为 main 可执行文件。
+/// `scenario` 决定使用哪套编译参数（Run=快速运行 O0，Test=多样例测试 O2）。
 /// 调用者负责持有 work_dir（TempDir）直到不再需要 exe。
 pub async fn compile_only(
     code: &str,
     config: &CompilerConfig,
+    scenario: CompileScenario,
     work_dir: &Path,
     compile_limits: ResourceLimits,
     cancel_rx: Option<oneshot::Receiver<()>>,
@@ -64,7 +79,7 @@ pub async fn compile_only(
     let main_cpp = work_dir.join("main.cpp");
     std::fs::write(&main_cpp, code)?;
 
-    // 编译：clang++/g++ <compile_args> -o main main.cpp
+    // 编译：clang++/g++ <args_for(scenario)> -o main main.cpp
     // Windows 可执行文件需 .exe 后缀
     #[cfg(unix)]
     let exe_name = "main";
@@ -72,7 +87,7 @@ pub async fn compile_only(
     let exe_name = "main.exe";
     let exe_path = work_dir.join(exe_name);
     let mut compile_cmd: Vec<String> = vec![config.compiler_path.to_string_lossy().into_owned()];
-    compile_cmd.extend(config.compile_args.iter().cloned());
+    compile_cmd.extend(config.args_for(scenario).iter().cloned());
     compile_cmd.push("-o".into());
     compile_cmd.push(exe_path.to_string_lossy().into_owned());
     compile_cmd.push(main_cpp.to_string_lossy().into_owned());
@@ -95,7 +110,11 @@ pub async fn compile_only(
         });
     }
 
-    Ok(CompileResult::Success(exe_path))
+    Ok(CompileResult::Success {
+        exe_path,
+        stdout: String::from_utf8_lossy(&compile_out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&compile_out.stderr).into_owned(),
+    })
 }
 
 /// 从 app handle 加载设置并构建 CompilerConfig + ResourceLimits
@@ -151,8 +170,8 @@ async fn run_compile_and_run_inner(
     let work_path = work_dir.path().to_path_buf();
 
     // 编译（复用 compile_only）
-    let exe_path = match compile_only(&code, config, &work_path, limits, cancel_rx).await? {
-        CompileResult::Success(p) => p,
+    let exe_path = match compile_only(&code, config, CompileScenario::Run, &work_path, limits, cancel_rx).await? {
+        CompileResult::Success { exe_path, .. } => exe_path,
         CompileResult::Failed {
             stdout,
             stderr,
@@ -263,5 +282,43 @@ int main() {
         assert_eq!(result.stage, RunStage::CompileFailed);
         assert!(!result.success);
         assert!(!result.stderr.is_empty());
+    }
+
+    /// 验证 compile_only 在编译成功且 stderr 含 warning 时，诊断信息不会丢失。
+    /// 场景：缺 return 的非 void 函数，clang++ 在 -Wall -Wextra 下产生
+    /// "non-void function does not return a value in all control paths" warning。
+    /// 编译仍成功（exit_code=0），但 stderr 不应为空，且应包含 "warning" 关键字。
+    #[tokio::test]
+    async fn compile_only_preserves_warnings_on_success() {
+        let warning_code = r#"#include <bits/stdc++.h>
+using namespace std;
+char _find(string s){
+    for (int i=0; i<(int)s.size(); i++){
+        if (s[i] == 'A') return s[i];
+    }
+}
+int main() { return 0; }
+"#;
+        let (config, limits) = test_config();
+        let work_dir = TempDir::new().unwrap();
+        let result = compile_only(warning_code, &config, CompileScenario::Run, work_dir.path(), limits, None)
+            .await
+            .expect("应编译成功（warning 不阻止编译）");
+        match result {
+            CompileResult::Success { exe_path, stdout, stderr } => {
+                // 可执行文件存在
+                assert!(exe_path.exists(), "exe_path 应存在");
+                // warning 不应丢失
+                assert!(
+                    stderr.contains("warning") || stderr.contains("_find"),
+                    "stderr 应包含 warning 诊断，实际: {stderr}"
+                );
+                // stdout 通常为空（编译器诊断都走 stderr）
+                let _ = stdout;
+            }
+            CompileResult::Failed { stderr, .. } => {
+                panic!("预期编译成功（warning 不阻止编译），但得到 CompileFailed: {stderr}");
+            }
+        }
     }
 }

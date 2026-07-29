@@ -39,7 +39,7 @@ function makeSettings(): AppSettings {
       fsize_mb: 64,
     },
     general: { locale: "zh", theme: "dark", layout: "horizontal", auto_hide_panel: false },
-    test: { fsize_mb: 10, test_time_limit_ms: 1000 },
+    test: { fsize_mb: 10, test_time_limit_ms: 1000, opt_level: "O2" },
     editor: {
       font_size: 14,
       theme: "vs-dark",
@@ -75,6 +75,7 @@ function resetStores(settings: AppSettings, status: "idle" | "running" | "done" 
     testProgress: null,
     ptyRunId: null,
     ptyExitInfo: null,
+    ptyStartTime: null,
     compileError: null,
     activeTabId: null,
     resultsByTab: {},
@@ -217,5 +218,40 @@ describe("StatusBar 窄窗口优先级类", () => {
     // 内存 2.0 MB
     const memItem = screen.getByText("2.0 MB").closest(".status-item");
     expect(memItem?.className).toContain("status-item-low-priority");
+  });
+
+  it("PTY 退出后显示耗时（runResult 为空时互斥显示）", () => {
+    resetStores(makeSettings(), "idle");
+    useRunManager.setState({
+      runResult: null,
+      ptyExitInfo: { exitCode: 0, killedBy: null, durationMs: 123, maxRssKb: null },
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    // PTY 耗时 123 ms 应出现
+    const durationItem = screen.getByText("123 ms").closest(".status-item");
+    expect(durationItem?.className).toContain("status-item-low-priority");
+  });
+
+  it("runResult 非空时不显示 PTY 耗时（runResult 优先）", () => {
+    resetStores(makeSettings(), "done");
+    useRunManager.setState({
+      runResult: {
+        run_id: "r1",
+        success: true,
+        stdout: "",
+        stderr: "",
+        exit_code: 0,
+        duration_ms: 55,
+        killed_by: null,
+        truncated: false,
+        stage: "run",
+        max_rss_kb: 0,
+      } as never,
+      ptyExitInfo: { exitCode: 0, killedBy: null, durationMs: 999, maxRssKb: null },
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    // 显示 runResult 的 55 ms，不显示 ptyExitInfo 的 999 ms
+    expect(screen.getByText("55 ms")).toBeInTheDocument();
+    expect(screen.queryByText("999 ms")).toBeNull();
   });
 });

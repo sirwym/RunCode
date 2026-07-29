@@ -28,6 +28,7 @@ function makeTestRunResult(passed: number, total: number): TestRunResult {
     stage: "ran",
     compile_stdout: "",
     compile_stderr: "",
+    used_opt_level: "O2",
     results: [],
   };
 }
@@ -59,7 +60,9 @@ describe("useRunManager per-tab 隔离", () => {
       testProgress: null,
       ptyRunId: null,
       ptyExitInfo: null,
+      ptyStartTime: null,
       compileError: null,
+      compileWarning: null,
       activeTabId: null,
       resultsByTab: {},
     });
@@ -208,19 +211,42 @@ describe("useRunManager per-tab 隔离", () => {
     expect(useRunManager.getState().compileError).toBe("error: foo");
   });
 
-  it("onPtyExit 写入当前 tab 的 ptyExitInfo 快照", () => {
+  it("onPtyExit 写入当前 tab 的 ptyExitInfo 快照（含 durationMs）", async () => {
     useRunManager.getState().setActiveTab("tab-a");
+    // 触发 startInteractive 设置 ptyStartTime
+    invokeMock.mockResolvedValueOnce({ status: "success", run_id: "x", compile_stdout: "", compile_stderr: "" });
+    await useRunManager.getState().startInteractive("code");
+    const before = Date.now();
     const exit = { exitCode: 0, killedBy: null };
-    useRunManager.getState().onPtyExit(exit);
+    useRunManager.getState().onPtyExit(exit, 2048);
+    const after = Date.now();
 
-    expect(useRunManager.getState().ptyExitInfo).toEqual(exit);
-    expect(useRunManager.getState().resultsByTab["tab-a"]?.ptyExitInfo).toEqual(exit);
+    const info = useRunManager.getState().ptyExitInfo;
+    expect(info?.exitCode).toBe(0);
+    expect(info?.maxRssKb).toBe(2048);
+    expect(info?.durationMs).not.toBeNull();
+    expect(info!.durationMs!).toBeGreaterThanOrEqual(0);
+    expect(info!.durationMs!).toBeLessThanOrEqual(after - before + 100);
+    // 快照隔离验证
+    expect(useRunManager.getState().resultsByTab["tab-a"]?.ptyExitInfo).toEqual(info);
 
     useRunManager.getState().setActiveTab("tab-b");
     expect(useRunManager.getState().ptyExitInfo).toBeNull();
 
     useRunManager.getState().setActiveTab("tab-a");
-    expect(useRunManager.getState().ptyExitInfo).toEqual(exit);
+    expect(useRunManager.getState().ptyExitInfo).toEqual(info);
+  });
+
+  it("stopInteractive 计算 durationMs", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({ status: "success", run_id: "x", compile_stdout: "", compile_stderr: "" });
+    await useRunManager.getState().startInteractive("code");
+    invokeMock.mockResolvedValueOnce(true); // stop_pty_run
+    await useRunManager.getState().stopInteractive();
+    const info = useRunManager.getState().ptyExitInfo;
+    expect(info?.killedBy).toBe("cancelled");
+    expect(info?.durationMs).not.toBeNull();
+    expect(info!.durationMs!).toBeGreaterThanOrEqual(0);
   });
 
   it("testProgress 不持久化到快照（瞬时状态）", async () => {
@@ -254,5 +280,158 @@ describe("useRunManager per-tab 隔离", () => {
     // 切到 tab-b → testProgress 清空
     useRunManager.getState().setActiveTab("tab-b");
     expect(useRunManager.getState().testProgress).toBeNull();
+  });
+});
+
+// ============ PTY 交互运行编译 warning 保留测试 ============
+// 验证 StartPtyResult::Success 携带 compile_stderr（含 warning）时：
+// - 状态保持 running（不变成 error）
+// - compileWarning 写入 store + 发起 tab 快照
+// - 不影响 compileError（语义分离）
+// - PTY 会话正常建立（ptyRunId 非空）
+describe("useRunManager PTY 编译 warning 保留", () => {
+  beforeEach(() => {
+    useRunManager.setState({
+      activeRunId: null,
+      kind: null,
+      status: "idle",
+      runResult: null,
+      testResult: null,
+      error: null,
+      testProgress: null,
+      ptyRunId: null,
+      ptyExitInfo: null,
+      ptyStartTime: null,
+      compileError: null,
+      compileWarning: null,
+      activeTabId: null,
+      resultsByTab: {},
+    });
+    invokeMock.mockReset();
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => {});
+  });
+
+  it("StartPtyResult success + 含 warning → 状态 running，compileWarning 存储，ptyRunId 非空", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    const warningStderr = "main.cpp:7:1: warning: non-void function does not return a value in all control paths [-Wreturn-type]";
+    invokeMock.mockResolvedValueOnce({
+      status: "success",
+      run_id: "pty-1",
+      compile_stdout: "",
+      compile_stderr: warningStderr,
+    });
+
+    await useRunManager.getState().startInteractive("code");
+
+    const s = useRunManager.getState();
+    // 状态保持 running（不变成 error/done）
+    expect(s.status).toBe("running");
+    expect(s.kind).toBe("interactive");
+    // PTY 会话正常建立
+    expect(s.activeRunId).toBe("pty-1");
+    expect(s.ptyRunId).toBe("pty-1");
+    // compileWarning 存储
+    expect(s.compileWarning).toBe(warningStderr);
+    // compileError 保持 null（语义分离，warning 不应触发错误状态）
+    expect(s.compileError).toBeNull();
+    // 快照隔离
+    expect(s.resultsByTab["tab-a"]?.compileWarning).toBe(warningStderr);
+    expect(s.resultsByTab["tab-a"]?.compileError).toBeNull();
+  });
+
+  it("StartPtyResult success + 空 stderr → compileWarning 为 null（无 warning 不显示）", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({
+      status: "success",
+      run_id: "pty-2",
+      compile_stdout: "",
+      compile_stderr: "",
+    });
+
+    await useRunManager.getState().startInteractive("code");
+
+    const s = useRunManager.getState();
+    expect(s.status).toBe("running");
+    expect(s.ptyRunId).toBe("pty-2");
+    expect(s.compileWarning).toBeNull();
+  });
+
+  it("StartPtyResult success + 仅空白 stderr → compileWarning 为 null", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({
+      status: "success",
+      run_id: "pty-3",
+      compile_stdout: "",
+      compile_stderr: "   \n  \n",
+    });
+
+    await useRunManager.getState().startInteractive("code");
+
+    const s = useRunManager.getState();
+    expect(s.compileWarning).toBeNull();
+  });
+
+  it("StartPtyResult compile_failed → compileError 存储，compileWarning 保持 null", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({
+      status: "compile_failed",
+      run_id: "x",
+      stderr: "error: foo",
+    });
+
+    await useRunManager.getState().startInteractive("code");
+
+    const s = useRunManager.getState();
+    // 编译失败 → error 状态
+    expect(s.status).toBe("error");
+    expect(s.activeRunId).toBeNull();
+    expect(s.ptyRunId).toBeNull();
+    expect(s.compileError).toBe("error: foo");
+    // warning 不应被设置
+    expect(s.compileWarning).toBeNull();
+  });
+
+  it("compileWarning 写入发起 tab，切换 tab 隔离", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    const warning = "main.cpp:3:5: warning: unused variable 'x' [-Wunused-variable]";
+    invokeMock.mockResolvedValueOnce({
+      status: "success",
+      run_id: "pty-4",
+      compile_stdout: "",
+      compile_stderr: warning,
+    });
+
+    await useRunManager.getState().startInteractive("code");
+
+    // 切到 tab-b → 无 compileWarning
+    useRunManager.getState().setActiveTab("tab-b");
+    expect(useRunManager.getState().compileWarning).toBeNull();
+
+    // 切回 tab-a → 恢复 warning
+    useRunManager.getState().setActiveTab("tab-a");
+    expect(useRunManager.getState().compileWarning).toBe(warning);
+  });
+
+  it("onPtyExit 后 compileWarning 保留在快照中（恢复查看时仍可见）", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    const warning = "main.cpp:7:1: warning: non-void function does not return a value";
+    invokeMock.mockResolvedValueOnce({
+      status: "success",
+      run_id: "pty-5",
+      compile_stdout: "",
+      compile_stderr: warning,
+    });
+    await useRunManager.getState().startInteractive("code");
+
+    // 模拟 PTY 退出
+    useRunManager.getState().onPtyExit({ exitCode: 0, killedBy: null }, 1024);
+
+    // 退出后 compileWarning 在当前 state 中保留（来自 tab-a 快照）
+    expect(useRunManager.getState().compileWarning).toBe(warning);
+    // 切走再切回，warning 仍在快照中
+    useRunManager.getState().setActiveTab("tab-b");
+    useRunManager.getState().setActiveTab("tab-a");
+    expect(useRunManager.getState().compileWarning).toBe(warning);
   });
 });

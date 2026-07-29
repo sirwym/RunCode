@@ -13,6 +13,47 @@ use crate::runner::executor::{KillReason, RunOutput};
 use crate::runner::limits::ResourceLimits;
 use crate::runner::output::{read_until_limit, MAX_OUTPUT_BYTES};
 
+// macOS: proc_pid_rusage FFI 声明（libproc）
+// RUSAGE_INFO_0 = 0，返回 rusage_info_v0 结构，含 ri_resident_size（当前常驻字节数）
+// proc_pid_rusage 返回当前快照非峰值，需轮询取 max
+#[cfg(target_os = "macos")]
+mod proc_rusage {
+    // rusage_info_v0 完整布局（来自 macOS SDK <sys/resource.h>）：
+    // 总大小 96 字节 = 16 (uuid) + 10 * 8 (u64 字段)
+    #[repr(C)]
+    pub struct RusageInfoV0 {
+        ri_uuid: [u8; 16],
+        ri_user_time: u64,
+        ri_system_time: u64,
+        ri_pkg_idle_wkups: u64,
+        ri_interrupt_wkups: u64,
+        ri_pageins: u64,
+        ri_wired_size: u64,
+        pub ri_resident_size: u64, // 当前常驻内存（字节），偏移 64
+        ri_phys_footprint: u64,
+        ri_proc_start_abstime: u64,
+        ri_proc_exit_abstime: u64,
+    }
+
+    extern "C" {
+        fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut RusageInfoV0) -> i32;
+    }
+
+    pub const RUSAGE_INFO_0: i32 = 0;
+
+    /// 查询指定 PID 的当前常驻内存（字节），失败返回 None
+    pub fn query_pid_resident_bytes(pid: i32) -> Option<u64> {
+        unsafe {
+            let mut info: RusageInfoV0 = std::mem::zeroed();
+            if proc_pid_rusage(pid, RUSAGE_INFO_0, &mut info) == 0 {
+                Some(info.ri_resident_size)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// 杀整个进程组（负号 PGID）
 fn kill_process_group(pgid: i32) {
     // 信号量为 0 表示无信号，仅检查；这里用 SIGKILL
@@ -21,7 +62,7 @@ fn kill_process_group(pgid: i32) {
 
 /// 读取 RUSAGE_CHILDREN 的 ru_maxrss（累计值），统一返回 KB。
 /// macOS ru_maxrss 单位是字节，需 / 1024；Linux 已是 KB。
-fn get_children_rusage_max_rss_kb() -> u64 {
+pub fn get_children_rusage_max_rss_kb() -> u64 {
     unsafe {
         let mut ru: libc::rusage = std::mem::zeroed();
         if libc::getrusage(libc::RUSAGE_CHILDREN, &mut ru) == 0 {
@@ -43,19 +84,86 @@ fn get_children_rusage_max_rss_kb() -> u64 {
     }
 }
 
-/// 等待子进程退出并采集 ru_maxrss（前后差值，单活动任务互斥下准确）。
-/// 返回 (exit_status_result, max_rss_kb)。
+/// 查询指定 PID 的当前 RSS（KB）。
+/// macOS 用 proc_pid_rusage（精确到具体 PID）；
+/// Linux 无此 API，返回 None（由现有 RUSAGE_CHILDREN 差值法兜底）。
+#[cfg(target_os = "macos")]
+pub fn query_proc_pid_rss_kb(pid: i32) -> Option<u64> {
+    proc_rusage::query_pid_resident_bytes(pid).map(|b| b / 1024)
+}
+
+/// 等待子进程退出并采集 max_rss_kb。
+/// - macOS: 轮询 proc_pid_rusage 取 ri_resident_size 的最大值（精确到具体 PID）
+/// - Linux/其他 Unix: 保留 RUSAGE_CHILDREN 差值法（已知不可靠，Linux 不在正式支持范围）
+/// 返回 (exit_status_result, max_rss_kb)
 async fn wait_with_rusage(
     child: &mut tokio::process::Child,
 ) -> (io::Result<std::process::ExitStatus>, u64) {
-    let baseline = get_children_rusage_max_rss_kb();
+    #[cfg(target_os = "macos")]
+    {
+        wait_with_rusage_macos(child).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let baseline = get_children_rusage_max_rss_kb();
+        let status = child.wait().await;
+        let after = get_children_rusage_max_rss_kb();
+        let max_rss_kb = if after > baseline {
+            after - baseline
+        } else {
+            0
+        };
+        (status, max_rss_kb)
+    }
+}
+
+/// macOS 轮询实现：仿 windows.rs 的 channel + AtomicBool 模式。
+/// 100ms 轮询 proc_pid_rusage，wait 后再查一次（趁 zombie 还在）。
+/// Drop guard 确保 future 被 cancel（超时/取消分支触发）时轮询线程不会泄漏。
+#[cfg(target_os = "macos")]
+async fn wait_with_rusage_macos(
+    child: &mut tokio::process::Child,
+) -> (io::Result<std::process::ExitStatus>, u64) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    // child.id() 在 run_with_limits 调用前已确保 Some（见 spawn 后 pid 获取与检查）
+    let pid = child.id().unwrap_or(0) as i32;
+    let (mem_tx, mem_rx) = mpsc::channel::<u64>();
+    let exit_flag = std::sync::Arc::new(AtomicBool::new(false));
+    let exit_flag_clone = exit_flag.clone();
+
+    // Drop guard: future 被 cancel 时设置 exit_flag，避免轮询线程泄漏
+    struct ExitFlagGuard(std::sync::Arc<AtomicBool>);
+    impl Drop for ExitFlagGuard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+    let _guard = ExitFlagGuard(exit_flag.clone());
+
+    std::thread::spawn(move || {
+        let mut max_rss = 0u64;
+        while !exit_flag_clone.load(Ordering::Relaxed) {
+            if let Some(rss) = query_proc_pid_rss_kb(pid) {
+                if rss > max_rss {
+                    max_rss = rss;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // 进程退出后（zombie 状态）再查一次最终峰值
+        if let Some(rss) = query_proc_pid_rss_kb(pid) {
+            if rss > max_rss {
+                max_rss = rss;
+            }
+        }
+        let _ = mem_tx.send(max_rss);
+    });
+
     let status = child.wait().await;
-    let after = get_children_rusage_max_rss_kb();
-    let max_rss_kb = if after > baseline {
-        after - baseline
-    } else {
-        0
-    };
+    exit_flag.store(true, Ordering::Relaxed);
+    let max_rss_kb = mem_rx.recv().unwrap_or(0);
     (status, max_rss_kb)
 }
 
@@ -168,12 +276,25 @@ pub async fn run_with_limits(
                 Some(status)
             }
             _ = tokio::time::sleep(timeout) => {
+                // macOS: 杀进程前单次查询内存快照（近似峰值，轮询线程由 Drop guard 清理）
+                #[cfg(target_os = "macos")]
+                {
+                    if let Some(rss) = query_proc_pid_rss_kb(pgid) {
+                        max_rss_kb = rss;
+                    }
+                }
                 kill_process_group(pgid);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Timeout);
                 None
             }
             _ = &mut cancel_rx => {
+                #[cfg(target_os = "macos")]
+                {
+                    if let Some(rss) = query_proc_pid_rss_kb(pgid) {
+                        max_rss_kb = rss;
+                    }
+                }
                 kill_process_group(pgid);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Cancelled);
@@ -188,6 +309,12 @@ pub async fn run_with_limits(
                 Some(status)
             }
             _ = tokio::time::sleep(timeout) => {
+                #[cfg(target_os = "macos")]
+                {
+                    if let Some(rss) = query_proc_pid_rss_kb(pgid) {
+                        max_rss_kb = rss;
+                    }
+                }
                 kill_process_group(pgid);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Timeout);
@@ -252,6 +379,26 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn debug_proc_pid_rusage() {
+        // 调试: 验证 proc_pid_rusage 对当前进程能返回非零 RSS
+        let pid = std::process::id() as i32;
+
+        // 用 getrusage(RUSAGE_SELF) 对比
+        let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru); }
+        eprintln!("RUSAGE_SELF ru_maxrss={} (bytes)", ru.ru_maxrss);
+
+        // 用 proc_rusage 模块的封装查询
+        let bytes = proc_rusage::query_pid_resident_bytes(pid);
+        eprintln!("proc_rusage::query_pid_resident_bytes: {:?} bytes", bytes);
+
+        let result = query_proc_pid_rss_kb(pid);
+        eprintln!("query_proc_pid_rss_kb: {:?} KB", result);
+        assert!(result.unwrap_or(0) > 0, "proc_pid_rusage 应返回非零 RSS");
+    }
+
     #[tokio::test]
     async fn hello_world() {
         let out = run_with_limits(
@@ -272,17 +419,26 @@ mod tests {
 
     #[tokio::test]
     async fn captures_max_rss() {
-        // 验证 run_with_limits 能正常完成并填充 RunOutput。
-        //
-        // 注：不断言 max_rss_kb > 0。RUSAGE_CHILDREN.ru_maxrss 是所有已回收子进程 RSS 的
-        // 最大值（max），wait_with_rusage 用 after - baseline 求差值，只有当本子进程 RSS
-        // 大于之前所有子进程时才 > 0。并行测试下此差值不可靠，属 Unix API 固有限制。
-        // Windows 实现用 GetProcessMemoryInfo 轮询，不依赖此机制。
+        // macOS: 直接运行 perl 分配 100MB（perl 是单进程，内存不被 bash 子进程隔离），
+        // proc_pid_rusage 按 PID 轮询可可靠采集到峰值。
+        // 其他平台: 用 bash_cmd 验证基本完成。
+        #[cfg(target_os = "macos")]
+    let cmd: Vec<String> = vec![
+            "/usr/bin/perl".into(),
+            "-e".into(),
+            // perl 的 sleep 只接受整数秒，sleep 0.2 会被截断为 0 立即返回。
+            // 用 select(undef,undef,undef,0.5) 实现 0.5 秒 fractional sleep，
+            // 给轮询线程（100ms 间隔）足够时间采集到峰值。
+            "my $x = 'x' x 104857600; select(undef,undef,undef,0.5)".into(),
+        ];
+        #[cfg(not(target_os = "macos"))]
+        let cmd: Vec<String> = bash_cmd("echo hello; sleep 0.05");
+
         let out = run_with_limits(
-            bash_cmd("echo hello; sleep 0.05"),
+            cmd,
             PathBuf::from("/tmp").as_path(),
             None,
-            Duration::from_secs(2),
+            Duration::from_secs(5),
             limits(),
             None,
         )
@@ -291,6 +447,53 @@ mod tests {
 
         assert_eq!(out.exit_code, Some(0));
         assert!(out.killed_by.is_none());
+        // macOS: proc_pid_rusage 按 PID 轮询，可可靠采集到峰值
+        #[cfg(target_os = "macos")]
+        assert!(
+            out.max_rss_kb > 50_000,
+            "macOS 应采集到 >50MB,实际 {}KB",
+            out.max_rss_kb
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_captures_max_rss() {
+        // macOS: perl 分配 100MB 后死循环，超时被杀前单次查询采集到内存快照。
+        // 验证超时分支的 macOS 单次查询能采集到内存（覆盖超时杀进程时序）。
+        #[cfg(target_os = "macos")]
+        let cmd: Vec<String> = vec![
+            "/usr/bin/perl".into(),
+            "-e".into(),
+            "my $x = 'x' x 104857600; while(1) {}".into(),
+        ];
+        #[cfg(not(target_os = "macos"))]
+        let cmd: Vec<String> = bash_cmd("sleep 30");
+
+        let out = run_with_limits(
+            cmd,
+            PathBuf::from("/tmp").as_path(),
+            None,
+            Duration::from_millis(800),
+            ResourceLimits {
+                cpu_secs: 10,
+                fsize_mb: 50,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(out.killed_by, Some(KillReason::Timeout)),
+            "应被超时杀死，实际 {:?}",
+            out.killed_by
+        );
+        #[cfg(target_os = "macos")]
+        assert!(
+            out.max_rss_kb > 50_000,
+            "macOS 超时杀进程也应采集到 >50MB,实际 {}KB",
+            out.max_rss_kb
+        );
     }
 
     #[tokio::test]

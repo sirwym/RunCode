@@ -167,9 +167,37 @@ body {
   font-size: 13px;
   color: var(--text);
   background-color: var(--bg);
+  background-image: var(--bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+}
+
+/* custom 主题下的图片遮罩层 */
+/* 作用：降低图片整体亮度，避免亮色图片刺眼，提升面板间隙可读性 */
+/* pointer-events: none 确保不阻挡点击 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, var(--mask-opacity, 0));
+  z-index: 0;
+  pointer-events: none;
+  display: var(--mask-display, none);
+}
+
+/* custom 主题时启用遮罩层 */
+:root[data-theme="custom"] body::before {
+  --mask-display: block;
+}
+
+/* 内容层在遮罩层之上 */
+#root {
+  position: relative;
+  z-index: 1;
 }
 
 /* ============== 主布局 Grid ============== */
@@ -712,6 +740,17 @@ body {
 .testcases-header .test-summary.summary-fail {
   color: var(--error);
   border-color: var(--error-border);
+}
+
+.testcases-header .test-opt-level-badge {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--primary-border);
+  background-color: var(--primary-soft);
+  color: var(--primary);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .testcases-header .testcases-spacer {
@@ -1509,4 +1548,58 @@ body {
   color: var(--text);
   white-space: nowrap;
   line-height: 1;
+}
+
+/* ============== 自定义图片主题：半透明面板背景覆盖 ============== */
+/* custom 主题时，--panel-bg / --panel-bg-alt 由 App.tsx 动态注入的
+ * --panel-bg-alpha / --panel-bg-alt-alpha 替代（半透明 rgba），
+ * 让面板透出图片背景。所有引用 var(--panel-bg) 等的元素自动获得半透明效果。
+ * 注意：编辑器 surface 用独立变量 --editor-surface-bg，避免与 --bg-terminal 循环覆盖。 */
+:root[data-theme="custom"] {
+  --panel-bg: var(--panel-bg-alpha, rgba(20, 20, 30, 0.82));
+  --panel-bg-alt: var(--panel-bg-alt-alpha, rgba(28, 28, 40, 0.85));
+}
+
+/* custom 主题下编辑器容器应用 editorAlpha（独立变量 --editor-surface-bg，单层合成）
+ * Monaco 内容层保持透明，避免 .editor-container（alpha）+ .monaco-editor（alpha）重复合成
+ * 不得用 --bg-terminal / --bg-terminal-alpha 覆盖编辑器 surface */
+:root[data-theme="custom"] .editor-container {
+  background-color: var(--editor-surface-bg, rgba(10, 10, 20, 0.92));
+}
+
+/* custom 主题下 Monaco 内容层透明：透明度只在 .editor-container 单层应用
+ * 避免 .editor-container（alpha）+ .monaco-editor（alpha）重复合成导致 0.92×0.92=0.9936 */
+:root[data-theme="custom"] .editor-container .monaco-editor,
+:root[data-theme="custom"] .editor-container .monaco-editor .monaco-editor-background,
+:root[data-theme="custom"] .editor-container .monaco-editor .overflow-guard,
+:root[data-theme="custom"] .editor-container .monaco-editor .monaco-scrollable-element {
+  background-color: transparent !important;
+}
+
+/* custom 主题下右侧面板透明，让 panel-bg（半透明 alpha）单层应用 */
+/* .right-panel 默认 background-color: var(--panel-bg)，custom 主题下 --panel-bg 已是半透明 */
+:root[data-theme="custom"] .right-panel {
+  background-color: var(--panel-bg);
+}
+
+/* custom 主题下 terminal-container 透明，让 xterm 自身的 rgba 背景单层应用
+ * panelAlpha 通过 buildCustomXtermTheme 直接写入 xterm theme.background，不经过 CSS 变量 */
+:root[data-theme="custom"] .terminal-container {
+  background-color: transparent;
+}
+
+/* ============== 自定义图片主题：浅色 base_mode 语义色覆盖 ============== */
+/* data-theme="custom" 时，品牌色与中性灰由 App.tsx 动态注入的 <style id="custom-theme-vars"> 提供；
+ * 语义色（success/warning/error）不从图片提取，按 data-base-mode 属性覆盖为浅色适配色。
+ * 深色 base_mode 不需要覆盖，沿用 :root 默认值。 */
+:root[data-theme="custom"][data-base-mode="light"] {
+  --success: #15803d;
+  --success-soft: rgba(21, 128, 61, 0.10);
+  --success-border: rgba(21, 128, 61, 0.40);
+  --warning: #a16207;
+  --warning-soft: rgba(161, 98, 7, 0.10);
+  --warning-border: rgba(161, 98, 7, 0.40);
+  --error: #b91c1c;
+  --error-soft: rgba(185, 28, 28, 0.10);
+  --error-border: rgba(185, 28, 28, 0.40);
 }

@@ -288,7 +288,7 @@ fn close_handle(h: HANDLE) {
 }
 
 /// 查询进程内存峰值（KB）
-fn query_process_rss_kb(pid: u32) -> Option<u64> {
+pub fn query_process_rss_kb(pid: u32) -> Option<u64> {
     use windows::Win32::System::Threading::OpenProcess;
 
     unsafe {

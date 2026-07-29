@@ -11,6 +11,10 @@ export type RunStatus = "idle" | "running" | "done" | "error";
 export interface PtyExitInfo {
   exitCode: number | null;
   killedBy: string | null;
+  /** PTY 运行耗时（毫秒），开始时间未记录时为 null */
+  durationMs: number | null;
+  /** 进程内存峰值（KB），后端无法获取时为 null */
+  maxRssKb: number | null;
 }
 
 // 把后端 AppError（{code, params}）或任意异常转为本地化文案
@@ -29,10 +33,11 @@ interface TabResults {
   testResult: TestRunResult | null;
   ptyExitInfo: PtyExitInfo | null;
   compileError: string | null;
+  compileWarning: string | null;
 }
 
 function emptyTabResults(): TabResults {
-  return { runResult: null, testResult: null, ptyExitInfo: null, compileError: null };
+  return { runResult: null, testResult: null, ptyExitInfo: null, compileError: null, compileWarning: null };
 }
 
 interface RunManagerState {
@@ -52,10 +57,16 @@ interface RunManagerState {
   // PTY 交互运行
   ptyRunId: string | null;
   ptyExitInfo: PtyExitInfo | null;
+  /** PTY 运行开始时间戳（毫秒），用于计算 durationMs */
+  ptyStartTime: number | null;
 
   // 编译失败时的 stderr（PTY 交互模式下，编译失败不创建 PTY 会话，
   // 直接把 stderr 存这里供 Terminal 显示 + Editor 解析错误行）
   compileError: string | null;
+
+  // 编译成功但有 warning 时的 stderr（PTY 交互模式下，编译成功仍启动 PTY，
+  // 在程序交互输出前以黄色显示 warning，不阻止程序启动，不触发错误状态）
+  compileWarning: string | null;
 
   // per-tab 结果快照（按 tab id 索引）
   activeTabId: string | null;
@@ -68,7 +79,8 @@ interface RunManagerState {
   runTests: (code: string, suiteId: string, strict: boolean) => Promise<void>;
   startInteractive: (code: string) => Promise<void>;
   stopInteractive: () => Promise<void>;
-  onPtyExit: (info: PtyExitInfo) => void;
+  onPtyExit: (info: Omit<PtyExitInfo, "durationMs" | "maxRssKb">, maxRssKb: number | null) => void;
+  markPtyFirstInput: () => void;
   stop: () => Promise<void>;
   reset: () => void;
 }
@@ -88,7 +100,9 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   testProgress: null,
   ptyRunId: null,
   ptyExitInfo: null,
+  ptyStartTime: null,
   compileError: null,
+  compileWarning: null,
   activeTabId: null,
   resultsByTab: {},
 
@@ -100,6 +114,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       testResult: snapshot.testResult,
       ptyExitInfo: snapshot.ptyExitInfo,
       compileError: snapshot.compileError,
+      compileWarning: snapshot.compileWarning,
       // testProgress 是瞬时的，切换 tab 时清空
       testProgress: null,
     });
@@ -116,7 +131,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   compileRun: async (code, stdin) => {
     if (get().activeRunId) return;
     const initiatorTabId = get().activeTabId;
-    set({ status: "running", error: null, kind: "compile_run", testResult: null });
+    set({ status: "running", error: null, kind: "compile_run", testResult: null, compileWarning: null });
     try {
       const result = await invoke<RunResult>("compile_and_run", { code, stdin });
       set((s) => {
@@ -129,6 +144,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                 compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+                compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
           : s.resultsByTab;
@@ -152,6 +168,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                 compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+                compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
           : s.resultsByTab;
@@ -201,6 +218,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 testResult: result,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                 compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+                compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
           : s.resultsByTab;
@@ -224,6 +242,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 testResult: null,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                 compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+                compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
           : s.resultsByTab;
@@ -251,12 +270,38 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       runResult: null,
       testResult: null,
       ptyExitInfo: null,
+      ptyStartTime: Date.now(),
       compileError: null,
+      compileWarning: null,
     });
     try {
       const result = await invoke<StartPtyResult>("start_pty_run", { code });
       if (result.status === "success") {
-        set({ activeRunId: result.run_id, ptyRunId: result.run_id });
+        // 编译成功但有 warning 时，存储 compile_stderr 供 Terminal 在 PTY 输出前显示。
+        // 注意：compile_stderr 即使为空字符串也存储（Terminal 会判断是否为空决定是否显示），
+        // 但为了精确控制显示，这里只在非空时存储。
+        const warningText = result.compile_stderr.trim() !== "" ? result.compile_stderr : null;
+        set((s) => {
+          const isStillActive = s.activeTabId === initiatorTabId;
+          const resultsByTab = initiatorTabId
+            ? {
+                ...s.resultsByTab,
+                [initiatorTabId]: {
+                  runResult: s.resultsByTab[initiatorTabId]?.runResult ?? null,
+                  testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
+                  ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
+                  compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+                  compileWarning: warningText,
+                },
+              }
+            : s.resultsByTab;
+          return {
+            activeRunId: result.run_id,
+            ptyRunId: result.run_id,
+            compileWarning: isStillActive ? warningText : s.compileWarning,
+            resultsByTab,
+          };
+        });
       } else {
         // 编译失败：后端返回 CompileFailed，不创建 PTY 会话
         set((s) => {
@@ -269,6 +314,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                   testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
                   ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                   compileError: result.stderr,
+                  compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
                 },
               }
             : s.resultsByTab;
@@ -301,7 +347,9 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
     } catch {
       // 忽略
     }
-    const exitInfo: PtyExitInfo = { exitCode: null, killedBy: "cancelled" };
+    const startTime = get().ptyStartTime;
+    const durationMs = startTime ? Date.now() - startTime : null;
+    const exitInfo: PtyExitInfo = { exitCode: null, killedBy: "cancelled", durationMs, maxRssKb: null };
     set((s) => {
       const initiatorTabId = s.activeTabId;
       const resultsByTab = initiatorTabId
@@ -312,6 +360,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
               testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
               ptyExitInfo: exitInfo,
               compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+              compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
             },
           }
         : s.resultsByTab;
@@ -321,13 +370,17 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
         status: "idle",
         kind: null,
         ptyExitInfo: exitInfo,
+        ptyStartTime: null,
         resultsByTab,
       };
     });
   },
 
-  onPtyExit: (info) => {
+  onPtyExit: (info, maxRssKb) => {
     set((s) => {
+      const startTime = s.ptyStartTime;
+      const durationMs = startTime ? Date.now() - startTime : null;
+      const exitInfo: PtyExitInfo = { ...info, durationMs, maxRssKb };
       const initiatorTabId = s.activeTabId;
       const resultsByTab = initiatorTabId
         ? {
@@ -335,8 +388,9 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
             [initiatorTabId]: {
               runResult: s.resultsByTab[initiatorTabId]?.runResult ?? null,
               testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
-              ptyExitInfo: info,
+              ptyExitInfo: exitInfo,
               compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+              compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
             },
           }
         : s.resultsByTab;
@@ -345,10 +399,16 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
         ptyRunId: null,
         status: "idle",
         kind: null,
-        ptyExitInfo: info,
+        ptyExitInfo: exitInfo,
+        ptyStartTime: null,
         resultsByTab,
       };
     });
+  },
+
+  markPtyFirstInput: () => {
+    // 后端 pty_first_input 事件触发，重置计时起点为首次输入时刻
+    set({ ptyStartTime: Date.now() });
   },
 
   stop: async () => {
@@ -379,8 +439,10 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       kind: null,
       ptyRunId: null,
       ptyExitInfo: null,
+      ptyStartTime: null,
       testProgress: null,
       compileError: null,
+      compileWarning: null,
     });
   },
 }));

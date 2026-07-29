@@ -137,7 +137,7 @@ Monaco 编辑器与 xterm 终端属于**运行时适配层**：它们的主题 A
 3. **测试覆盖**：必须有对应测试文件验证颜色值的精确性（见 [Editor.test.ts](../src/components/Editor.test.ts) 与 [Terminal.test.ts](../src/components/Terminal.test.ts)）
 4. **Monaco HEX 约束**：Monaco `colors` 字段仅接受 HEX（3/4/6/8 位），`rgba()` 会被忽略并回退到默认色（红色），半透明色必须使用 8 位 HEX（`#RRGGBBAA`）
 
-**Monaco 主题映射**：持久化设置保存 `vs-dark` / `vs` / `hc-black`，渲染层经 `mapMonacoTheme` 映射到 `runcode-dark` / `runcode-light` / `hc-black` 继承主题。
+**Monaco 主题映射**：`editor.theme` 字段已废弃（保留在 schema 但渲染层不读），渲染层由 `general.theme` 派生的 `effectiveTheme` 决定，经 `mapMonacoTheme` 映射到 `runcode-dark`（dark） / `runcode-light`（light）。`hc-black` 不再暴露给用户，老配置里的值会被忽略。
 
 | 主题键 | Light HEX | Dark HEX |
 |---|---|---|
@@ -205,9 +205,9 @@ Monaco 编辑器与 xterm 终端属于**运行时适配层**：它们的主题 A
 
 ### 7.3 主题禁止
 
-- **禁止修改持久化 schema**：`settings.editor.theme` 仍保存 `vs-dark` / `vs` / `hc-black`，渲染层经 `mapMonacoTheme` 映射
+- **禁止独立设置编辑器主题**：`editor.theme` 字段已废弃，渲染层完全由 `general.theme` 派生。UI 上只有"软件主题"一个入口（dark / light / system）
 - **禁止 Monaco colors 使用 rgba()**：必须使用 8 位 HEX（`#RRGGBBAA`），否则会回退到默认色（红色）
-- **禁止 hc-black 主题品牌化**：高对比度主题保留原生行为
+- **禁止 hc-black 主题品牌化**：`hc-black` 不再暴露给用户；老配置里的 `hc-black` 值会被忽略，自动跟随软件主题
 
 ## 8. 相关文档
 

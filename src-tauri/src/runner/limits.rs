@@ -56,6 +56,7 @@ mod tests {
         let test = TestSettings {
             fsize_mb: 50,
             test_time_limit_ms: 1000,
+            opt_level: "O2".into(),
         };
         let limits = ResourceLimits::from_settings(&runtime, &test);
         assert_eq!(limits.fsize_mb, 50); // 从 test 读取
@@ -72,6 +73,7 @@ mod tests {
         let test = TestSettings {
             fsize_mb: 10,
             test_time_limit_ms: 1000,
+            opt_level: "O2".into(),
         };
         let limits = ResourceLimits::from_settings(&runtime, &test);
         assert_eq!(limits.cpu_secs, 7); // 从 runtime 读取

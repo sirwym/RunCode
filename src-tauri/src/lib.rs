@@ -17,11 +17,13 @@ mod test_suite;
 
 use commands::{
     add_recent_file, add_test_case, clear_recent_files, compile_and_run, create_test_suite,
-    delete_test_suite, extract_code_symbols, find_or_create_suite_by_doc_path, format_code,
-    get_all_case_previews, get_case_full_expected, get_case_preview, get_recent_files,
-    get_settings, import_test_cases, load_test_suite, open_file, remove_recent_file,
-    remove_test_case, resize_pty, run_tests, save_file, save_settings, start_pty_run,
-    stop_pty_run, stop_run, update_test_case, update_view_menu_state, write_pty_stdin,
+    delete_custom_theme_image, delete_test_suite, extract_code_symbols,
+    find_or_create_suite_by_doc_path, format_code, get_all_case_previews, get_case_full_expected,
+    get_case_preview, get_custom_theme_image_path, get_recent_files, get_settings,
+    import_test_cases, load_test_suite, open_file, read_file_bytes, remove_recent_file,
+    remove_test_case, resize_pty, run_tests, save_custom_theme_image, save_file, save_settings,
+    start_pty_run, stop_pty_run, stop_run, update_test_case, update_view_menu_state,
+    write_pty_stdin,
 };
 use pty::PtyManager;
 use run_manager::RunManager;
@@ -64,6 +66,10 @@ pub fn run() {
             format_code,
             update_view_menu_state,
             extract_code_symbols,
+            read_file_bytes,
+            save_custom_theme_image,
+            delete_custom_theme_image,
+            get_custom_theme_image_path,
         ])
         .setup(|app| {
             // 应用菜单（RunCode）
@@ -237,6 +243,14 @@ pub fn run() {
                 &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &help_menu],
             )?;
             app.set_menu(menu)?;
+
+            // 清理 custom_themes/ 目录下未被 settings.json 引用的孤儿图片文件
+            // （处理"用户点应用主题但未保存就关闭面板"产生的孤儿文件）
+            // cleanup 失败不应阻塞应用启动，用 if let Ok 静默处理
+            if let Ok(base) = app.path().app_data_dir() {
+                let loaded = settings::load(&base);
+                settings::cleanup_orphan_themes(&base, &loaded);
+            }
 
             Ok(())
         })

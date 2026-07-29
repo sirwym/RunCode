@@ -5,7 +5,93 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
+
+/// 允许的优化级别白名单（界面 Select 也只用这 4 个值）
+const ALLOWED_OPT_LEVELS: &[&str] = &["O0", "O1", "O2", "O3"];
+
+/// 校验优化级别是否在白名单内
+pub fn validate_opt_level(opt_level: &str) -> Result<(), AppError> {
+    if !ALLOWED_OPT_LEVELS.contains(&opt_level) {
+        return Err(AppError::Other {
+            detail: format!("优化级别非法: {opt_level}（仅允许 O0/O1/O2/O3）"),
+        });
+    }
+    Ok(())
+}
+
+/// 自定义图片主题提取出的颜色组（与前端 CustomThemeColors 对应）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomThemeColors {
+    pub bg: String,
+    pub panel_bg: String,
+    pub panel_bg_alt: String,
+    pub text: String,
+    pub text_muted: String,
+    pub border: String,
+    pub primary: String,
+    pub primary_hover: String,
+    pub primary_foreground: String,
+    pub primary_soft: String,
+    pub primary_border: String,
+    pub bg_terminal: String,
+}
+
+/// 自定义图片主题配置（image_file + 提取颜色 + 亮度模式 + 透明度参数）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomThemeConfig {
+    /// 图片在 app_data_dir/custom_themes/ 下的文件名（不含路径）
+    pub image_file: String,
+    /// 提取出的颜色组（缓存避免每次重新提取）
+    pub colors: CustomThemeColors,
+    /// 亮度模式："dark" / "light"，决定 Monaco base + 语义色基础
+    pub base_mode: String,
+    /// 面板透明度 50~95（百分比整数，向后兼容用默认值 82）
+    #[serde(default = "default_panel_alpha")]
+    pub panel_alpha: u8,
+    /// 编辑器透明度 70~100（百分比整数，默认 92）
+    #[serde(default = "default_editor_alpha")]
+    pub editor_alpha: u8,
+    /// 图片遮罩强度 0~60（百分比整数，默认 20）
+    #[serde(default = "default_mask_opacity")]
+    pub mask_opacity: u8,
+}
+
+fn default_panel_alpha() -> u8 {
+    82
+}
+fn default_editor_alpha() -> u8 {
+    92
+}
+fn default_mask_opacity() -> u8 {
+    20
+}
+
+impl Default for CustomThemeConfig {
+    fn default() -> Self {
+        Self {
+            image_file: String::new(),
+            colors: CustomThemeColors {
+                bg: "#1e1e2e".into(),
+                panel_bg: "#181825".into(),
+                panel_bg_alt: "#11111b".into(),
+                text: "#cdd6f4".into(),
+                text_muted: "#7f849c".into(),
+                border: "#313244".into(),
+                primary: "#89b4fa".into(),
+                primary_hover: "#b4befe".into(),
+                primary_foreground: "#1e1e2e".into(),
+                primary_soft: "rgba(137, 180, 250, 0.14)".into(),
+                primary_border: "rgba(137, 180, 250, 0.40)".into(),
+                bg_terminal: "#1e1e2e".into(),
+            },
+            base_mode: "dark".into(),
+            panel_alpha: default_panel_alpha(),
+            editor_alpha: default_editor_alpha(),
+            mask_opacity: default_mask_opacity(),
+        }
+    }
+}
 
 /// 应用设置（持久化到 app_data_dir/settings.json）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,7 +188,7 @@ fn default_fsize_mb() -> u64 {
 
 /// 测试设置（多样例测试相关）
 ///
-/// 显式 Default：fsize_mb=10, test_time_limit_ms=1000。
+/// 显式 Default：fsize_mb=10, test_time_limit_ms=1000, opt_level=O2。
 /// 不用 #[derive(Default)]（那会让 fsize_mb=0，与默认值 10 不一致，
 /// 导致迁移逻辑无法区分"用户写了 0"和"字段缺失"）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +199,9 @@ pub struct TestSettings {
     /// 单例测试时间限制（毫秒），超过则该用例判失败
     #[serde(default = "default_test_time_limit_ms")]
     pub test_time_limit_ms: u64,
+    /// 多样例测试优化级别（默认 O2，接近 OI 判题环境）
+    #[serde(default = "default_test_opt_level")]
+    pub opt_level: String,
 }
 
 impl Default for TestSettings {
@@ -120,6 +209,7 @@ impl Default for TestSettings {
         Self {
             fsize_mb: default_fsize_mb(),
             test_time_limit_ms: default_test_time_limit_ms(),
+            opt_level: default_test_opt_level(),
         }
     }
 }
@@ -128,13 +218,17 @@ fn default_test_time_limit_ms() -> u64 {
     1000
 }
 
+fn default_test_opt_level() -> String {
+    "O2".into()
+}
+
 /// 软件层通用设置（与具体编程语言/编辑器无关）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralSettings {
     /// 界面语言：zh / en
     #[serde(default = "default_locale")]
     pub locale: String,
-    /// 软件主题：dark / light / system
+    /// 软件主题：dark / light / system / custom
     #[serde(default = "default_theme")]
     pub theme: String,
     /// 布局方向：horizontal（左右分栏，默认） | vertical（上下分栏）
@@ -143,6 +237,10 @@ pub struct GeneralSettings {
     /// 是否自动隐藏输出面板（仅在执行时展开）
     #[serde(default)]
     pub auto_hide_panel: bool,
+    /// 自定义图片主题配置（仅 theme === "custom" 时存在）
+    /// Option + skip_serializing_if 确保老配置无此字段时不报错，新配置不写入 null
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_theme: Option<CustomThemeConfig>,
 }
 
 /// 编辑器（Monaco）设置
@@ -184,7 +282,7 @@ pub struct EditorSettings {
 }
 
 fn default_editor_theme() -> String {
-    "vs-dark".into()
+    "vs".into()
 }
 fn default_indent_style() -> String {
     "space".into()
@@ -215,7 +313,7 @@ fn default_terminal_font_size() -> u32 {
     13
 }
 fn default_theme() -> String {
-    "dark".into()
+    "light".into()
 }
 
 fn default_layout() -> String {
@@ -242,12 +340,14 @@ impl Default for AppSettings {
             test: TestSettings {
                 fsize_mb: default_fsize_mb(),
                 test_time_limit_ms: default_test_time_limit_ms(),
+                opt_level: default_test_opt_level(),
             },
             general: GeneralSettings {
                 locale: default_locale(),
                 theme: default_theme(),
                 layout: default_layout(),
                 auto_hide_panel: false,
+                custom_theme: None,
             },
             editor: EditorSettings {
                 font_size: default_font_size(),
@@ -334,6 +434,14 @@ pub fn validate_extra_args(args: &str) -> Result<Vec<String>, AppError> {
             });
         }
 
+        // 拒绝所有 -O* 优化级别参数（避免覆盖界面选择）
+        // 用原始大小写检查：-O（优化级别）区分于 -o（输出重定向）
+        if p.starts_with("-O") {
+            return Err(AppError::Other {
+                detail: format!("附加参数包含优化级别参数，已拒绝: {p}（请在界面中选择优化级别）"),
+            });
+        }
+
         // 拒绝 -oXXX 形式（如 -o/tmp/evil）
         if lower.starts_with("-o") && lower.len() > 2 {
             return Err(AppError::Other {
@@ -379,14 +487,23 @@ fn shlex_like_split(s: &str) -> Vec<String> {
 }
 
 /// 构建编译参数（不含编译器路径、-o、源文件路径）
-pub fn build_compile_args(settings: &CompilerSettings) -> Result<Vec<String>, AppError> {
+///
+/// `opt_level` 由调用方传入（快速运行用 compiler.opt_level，多样例测试用 test.opt_level），
+/// 避免附加参数里的 -O* 覆盖界面选择（validate_extra_args 已拒绝 -O*）。
+pub fn build_compile_args(
+    settings: &CompilerSettings,
+    opt_level: &str,
+) -> Result<Vec<String>, AppError> {
+    // 最后一道防线：即使配置文件被手工篡改也拒绝非法 opt_level
+    validate_opt_level(opt_level)?;
+
     let mut args = Vec::new();
 
     // C++ 标准
     args.push(format!("-std={}", settings.cpp_standard));
 
     // 优化级别
-    args.push(format!("-{}", settings.opt_level));
+    args.push(format!("-{}", opt_level));
 
     // 警告级别
     match settings.warnings.as_str() {
@@ -428,19 +545,29 @@ fn settings_path(base: &Path) -> PathBuf {
 /// 才把 `runtime.fsize_mb` 复制到 `test.fsize_mb`（仅一次，不重复迁移）。
 /// 如果 `test` 字段已存在，无条件保留用户保存的值。
 pub fn load(base: &Path) -> AppSettings {
-    match fs::read_to_string(settings_path(base)) {
+    let mut s = match fs::read_to_string(settings_path(base)) {
         Ok(raw) => {
             match serde_json::from_str::<AppSettings>(&raw) {
                 Ok(s) => {
-                    // 反序列化成功，检查原始 JSON 是否有 test 字段决定是否迁移
-                    let has_test_field = serde_json::from_str::<serde_json::Value>(&raw)
-                        .ok()
-                        .and_then(|v| v.get("test").map(|t| !t.is_null()))
+                    // 反序列化成功，检查原始 JSON 决定是否需要迁移
+                    let original_v: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+                    let original_sv = original_v
+                        .get("schema_version")
+                        .and_then(|x| x.as_u64())
+                        .unwrap_or(1) as u32;
+                    let has_test_field = original_v
+                        .get("test")
+                        .map(|t| !t.is_null())
                         .unwrap_or(false);
                     let mut s = merge_with_defaults(s);
                     if !has_test_field && s.runtime.fsize_mb != s.test.fsize_mb {
                         // 旧配置没有 test 字段：执行一次性迁移
                         s.test.fsize_mb = s.runtime.fsize_mb;
+                    }
+                    // 旧版本配置因 serde 默认值可直接反序列化成功，
+                    // 但磁盘 schema_version 仍为旧值，需写回以保证版本一致性
+                    if original_sv < SCHEMA_VERSION {
+                        let _ = save(base, &s);
                     }
                     s
                 }
@@ -465,6 +592,45 @@ pub fn load(base: &Path) -> AppSettings {
             }
         }
         Err(_) => AppSettings::default(),
+    };
+
+    // 校验 custom_theme 引用的图片是否存在；不存在则清除配置 + 回退主题
+    if let Some(custom) = s.general.custom_theme.clone() {
+        let img_path = base.join("custom_themes").join(&custom.image_file);
+        if !img_path.exists() {
+            s.general.custom_theme = None;
+            if s.general.theme == "custom" {
+                s.general.theme = "dark".to_string();
+                s.editor.theme = "vs-dark".to_string();
+            }
+        }
+    }
+
+    s
+}
+
+/// 清理 custom_themes/ 目录下未被 settings.json 引用的孤儿图片文件
+///
+/// 在应用启动时（lib.rs setup）调用一次，处理"用户点应用主题但未保存就关闭面板"
+/// 产生的孤儿文件。
+pub fn cleanup_orphan_themes(base: &Path, settings: &AppSettings) {
+    let themes_dir = base.join("custom_themes");
+    if !themes_dir.exists() {
+        return;
+    }
+    let expected_file: Option<&str> = settings
+        .general
+        .custom_theme
+        .as_ref()
+        .map(|c| c.image_file.as_str());
+    if let Ok(entries) = fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if Some(name) != expected_file {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
     }
 }
 
@@ -632,6 +798,9 @@ fn merge_with_defaults(mut s: AppSettings) -> AppSettings {
     if s.test.test_time_limit_ms == 0 {
         s.test.test_time_limit_ms = default.test.test_time_limit_ms;
     }
+    if s.test.opt_level.is_empty() {
+        s.test.opt_level = default.test.opt_level;
+    }
     if s.general.locale.is_empty() {
         s.general.locale = default.general.locale;
     }
@@ -682,16 +851,17 @@ mod tests {
         assert_eq!(s.runtime.compile_timeout_secs, 10);
         assert_eq!(s.runtime.run_timeout_secs, 5);
         assert_eq!(s.general.locale, "zh");
-        assert_eq!(s.editor.theme, "vs-dark");
+        assert_eq!(s.editor.theme, "vs");
         assert_eq!(s.editor.indent_size, 4);
         assert!(s.editor.enable_suggestions);
-        assert_eq!(s.schema_version, 3);
+        assert_eq!(s.test.opt_level, "O2");
+        assert_eq!(s.schema_version, 4);
     }
 
     #[test]
     fn build_args_basic() {
         let s = AppSettings::default();
-        let args = build_compile_args(&s.compiler).unwrap();
+        let args = build_compile_args(&s.compiler, &s.compiler.opt_level).unwrap();
         assert!(args.contains(&"-std=c++17".to_string()));
         assert!(args.contains(&"-O0".to_string()));
         assert!(args.contains(&"-Wall".to_string()));
@@ -703,9 +873,25 @@ mod tests {
     fn build_args_with_extra() {
         let mut s = AppSettings::default();
         s.compiler.extra_args = "-DDEBUG -g".into();
-        let args = build_compile_args(&s.compiler).unwrap();
+        let args = build_compile_args(&s.compiler, &s.compiler.opt_level).unwrap();
         assert!(args.contains(&"-DDEBUG".to_string()));
         assert!(args.contains(&"-g".to_string()));
+    }
+
+    #[test]
+    fn build_args_with_custom_opt_level() {
+        // 同一份 CompilerSettings 搭配不同 opt_level 产出不同 args
+        let s = AppSettings::default();
+        // 快速运行用 O0
+        let run_args = build_compile_args(&s.compiler, "O0").unwrap();
+        assert!(run_args.contains(&"-O0".to_string()));
+        assert!(!run_args.contains(&"-O2".to_string()));
+        // 多样例测试用 O2
+        let test_args = build_compile_args(&s.compiler, "O2").unwrap();
+        assert!(test_args.contains(&"-O2".to_string()));
+        assert!(!test_args.contains(&"-O0".to_string()));
+        // 公共参数应一致
+        assert_eq!(run_args[0], test_args[0]); // -std=c++17
     }
 
     #[test]
@@ -723,6 +909,68 @@ mod tests {
     #[test]
     fn validate_rejects_pipe() {
         assert!(validate_extra_args("-pipe").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_opt_level_in_extra_args() {
+        // -O2 应被拒绝，且错误消息应含"优化级别"（而非"输出重定向"）
+        let err = validate_extra_args("-O2").unwrap_err();
+        let msg = match err {
+            AppError::Other { detail } => detail,
+            _ => panic!("预期 AppError::Other"),
+        };
+        assert!(msg.contains("优化级别"), "错误消息应含'优化级别'，实际: {msg}");
+    }
+
+    #[test]
+    fn validate_rejects_opt_level_variants() {
+        // 所有 -O* 变体均应被拒绝
+        assert!(validate_extra_args("-O0").is_err());
+        assert!(validate_extra_args("-O1").is_err());
+        assert!(validate_extra_args("-O3").is_err());
+        assert!(validate_extra_args("-Ofast").is_err());
+        assert!(validate_extra_args("-Og").is_err());
+        assert!(validate_extra_args("-Os").is_err());
+        assert!(validate_extra_args("-Oz").is_err());
+        // 单独的 -O 也应被拒绝
+        assert!(validate_extra_args("-O").is_err());
+    }
+
+    #[test]
+    fn validate_opt_level_accepts_allowed() {
+        for level in &["O0", "O1", "O2", "O3"] {
+            assert!(validate_opt_level(level).is_ok());
+        }
+    }
+
+    #[test]
+    fn validate_opt_level_rejects_invalid() {
+        // 安全风险场景：可拼成 -o 覆盖文件
+        assert!(validate_opt_level("o foo.txt").is_err());
+        assert!(validate_opt_level("o").is_err());
+        // 非教学场景的 GCC 扩展
+        assert!(validate_opt_level("Ofast").is_err());
+        assert!(validate_opt_level("Og").is_err());
+        assert!(validate_opt_level("Os").is_err());
+        // 空字符串与非法值
+        assert!(validate_opt_level("").is_err());
+        assert!(validate_opt_level("O9").is_err());
+    }
+
+    #[test]
+    fn build_compile_args_rejects_invalid_opt_level() {
+        let s = CompilerSettings {
+            cpp_standard: "c++17".into(),
+            opt_level: "O0".into(),
+            warnings: "wall_extra".into(),
+            extra_args: String::new(),
+            compiler_path: None,
+            template: String::new(),
+        };
+        // 非法 opt_level 应被 build_compile_args 拒绝
+        assert!(build_compile_args(&s, "o foo.txt").is_err());
+        assert!(build_compile_args(&s, "Ofast").is_err());
+        assert!(build_compile_args(&s, "").is_err());
     }
 
     #[test]
@@ -814,7 +1062,7 @@ mod tests {
         assert_eq!(s.runtime.cpu_secs, 5);
         assert_eq!(s.general.locale, "zh");
         assert_eq!(s.editor.font_size, 14);
-        assert_eq!(s.editor.theme, "vs-dark");
+        assert_eq!(s.editor.theme, "vs");
     }
 
     #[test]
@@ -835,8 +1083,8 @@ mod tests {
         assert_eq!(s.runtime.run_timeout_secs, 15);
         assert_eq!(s.runtime.cpu_secs, 8);
         assert_eq!(s.runtime.fsize_mb, 50);
-        // schema 升级到 3
-        assert_eq!(s.schema_version, 3);
+        // schema 升级到 4
+        assert_eq!(s.schema_version, 4);
     }
 
     #[test]
@@ -908,7 +1156,7 @@ mod tests {
         assert!(!loaded.editor.auto_closing_quotes);
         assert_eq!(loaded.editor.word_wrap, "off");
         assert!(loaded.editor.minimap_enabled);
-        assert_eq!(loaded.schema_version, 3);
+        assert_eq!(loaded.schema_version, 4);
     }
 
     #[test]
@@ -928,20 +1176,22 @@ mod tests {
         assert_eq!(s.editor.terminal_font_size, 13);
         assert_eq!(s.editor.indent_style, "space");
         assert_eq!(s.editor.indent_size, 4);
-        // schema 升级到 3
-        assert_eq!(s.schema_version, 3);
+        // schema 升级到 4
+        assert_eq!(s.schema_version, 4);
     }
 
     #[test]
     fn test_settings_default() {
-        // 显式 Default：fsize_mb=10, test_time_limit_ms=1000
+        // 显式 Default：fsize_mb=10, test_time_limit_ms=1000, opt_level=O2
         let t = TestSettings::default();
         assert_eq!(t.fsize_mb, 10);
         assert_eq!(t.test_time_limit_ms, 1000);
-        // AppSettings::default().test 也应是 10/1000
+        assert_eq!(t.opt_level, "O2");
+        // AppSettings::default().test 也应是 10/1000/O2
         let s = AppSettings::default();
         assert_eq!(s.test.fsize_mb, 10);
         assert_eq!(s.test.test_time_limit_ms, 1000);
+        assert_eq!(s.test.opt_level, "O2");
     }
 
     #[test]
@@ -1052,5 +1302,278 @@ mod tests {
         // test.fsize_mb 仍为 30，不被 runtime 的 99 覆盖
         assert_eq!(s2.test.fsize_mb, 30);
         assert_eq!(s2.runtime.fsize_mb, 99);
+    }
+
+    #[test]
+    fn migrate_v3_to_v4_fills_test_opt_level() {
+        // v3 配置（schema_version=3，有 test 字段但无 opt_level）
+        let tmp = tempfile::TempDir::new().unwrap();
+        let v3 = r#"{"compiler":{"cpp_standard":"c++17","opt_level":"O0","warnings":"wall_extra","extra_args":"","compiler_path":null,"template":""},"runtime":{"compile_timeout_secs":10,"run_timeout_secs":5,"cpu_secs":5,"fsize_mb":10},"test":{"fsize_mb":10,"test_time_limit_ms":1000},"general":{"locale":"zh","theme":"dark","layout":"horizontal","auto_hide_panel":false},"editor":{"font_size":14,"theme":"vs-dark","terminal_font_size":13,"indent_style":"space","indent_size":4,"line_numbers":"on","enable_suggestions":true,"auto_closing_brackets":true,"auto_closing_quotes":true,"word_wrap":"on","minimap_enabled":false},"current_language":"cpp","schema_version":3}"#;
+        std::fs::write(tmp.path().join("settings.json"), v3).unwrap();
+
+        let s = load(tmp.path());
+        // test.opt_level 缺失 → 迁移后填默认值 O2
+        assert_eq!(s.test.opt_level, "O2");
+        // 其他 test 字段保留
+        assert_eq!(s.test.fsize_mb, 10);
+        assert_eq!(s.test.test_time_limit_ms, 1000);
+        // schema 升级到 4
+        assert_eq!(s.schema_version, 4);
+    }
+
+    #[test]
+    fn migrate_v3_to_v4_without_test_field() {
+        // v3 配置无 test 字段：fsize_mb 从 runtime 迁移，opt_level 填默认 O2
+        let tmp = tempfile::TempDir::new().unwrap();
+        let v3 = r#"{"compiler":{"cpp_standard":"c++17","opt_level":"O0","warnings":"wall_extra","extra_args":"","compiler_path":null,"template":""},"runtime":{"compile_timeout_secs":10,"run_timeout_secs":5,"cpu_secs":5,"fsize_mb":25},"general":{"locale":"zh","theme":"dark","layout":"horizontal","auto_hide_panel":false},"editor":{"font_size":14,"theme":"vs-dark","terminal_font_size":13,"indent_style":"space","indent_size":4,"line_numbers":"on","enable_suggestions":true,"auto_closing_brackets":true,"auto_closing_quotes":true,"word_wrap":"on","minimap_enabled":false},"current_language":"cpp","schema_version":3}"#;
+        std::fs::write(tmp.path().join("settings.json"), v3).unwrap();
+
+        let s = load(tmp.path());
+        // runtime.fsize_mb=25 迁移到 test.fsize_mb
+        assert_eq!(s.test.fsize_mb, 25);
+        // opt_level 填默认 O2
+        assert_eq!(s.test.opt_level, "O2");
+        assert_eq!(s.schema_version, 4);
+    }
+
+    #[test]
+    fn v4_roundtrip_preserves_test_opt_level() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut s = AppSettings::default();
+        s.test.opt_level = "O1".into();
+        save(tmp.path(), &s).unwrap();
+        let loaded = load(tmp.path());
+        assert_eq!(loaded.test.opt_level, "O1");
+        assert_eq!(loaded.schema_version, 4);
+    }
+
+    #[test]
+    fn migrate_v3_to_v4_writes_back_to_disk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // 准备 v3 配置：有 test 字段但无 opt_level，schema_version=3
+        let v3_json = r#"{"compiler":{"cpp_standard":"c++17","opt_level":"O0","warnings":"wall_extra","extra_args":"","compiler_path":null,"template":""},"runtime":{"compile_timeout_secs":10,"run_timeout_secs":5,"cpu_secs":5,"fsize_mb":64},"test":{"fsize_mb":10,"test_time_limit_ms":1000},"general":{"locale":"zh","theme":"dark","layout":"horizontal","auto_hide_panel":false},"editor":{"font_size":14,"theme":"vs-dark","terminal_font_size":14,"indent_style":"space","indent_size":4,"line_numbers":"on","enable_suggestions":true,"auto_closing_brackets":true,"auto_closing_quotes":true,"word_wrap":"off","minimap_enabled":false},"current_language":"cpp","schema_version":3}"#;
+        std::fs::write(tmp.path().join("settings.json"), v3_json).unwrap();
+
+        // load 触发迁移
+        let s = load(tmp.path());
+        // 内存对象正确
+        assert_eq!(s.schema_version, 4);
+        assert_eq!(s.test.opt_level, "O2");
+
+        // 关键：重新读磁盘，验证已写回
+        let disk_raw = std::fs::read_to_string(tmp.path().join("settings.json")).unwrap();
+        let disk: serde_json::Value = serde_json::from_str(&disk_raw).unwrap();
+        assert_eq!(disk["schema_version"].as_u64(), Some(4));
+        assert_eq!(disk["test"]["opt_level"].as_str(), Some("O2"));
+    }
+
+    #[test]
+    fn load_does_not_rewrite_when_already_v4() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // 用 AppSettings::default() 生成 v4 配置并 save
+        let s = AppSettings::default();
+        save(tmp.path(), &s).unwrap();
+        let original_mtime = std::fs::metadata(tmp.path().join("settings.json"))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        // 等待文件系统时间戳精度
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // load 不应重写文件
+        let _ = load(tmp.path());
+        let new_mtime = std::fs::metadata(tmp.path().join("settings.json"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(original_mtime, new_mtime, "v4 配置 load 时不应触发 save");
+    }
+
+    fn sample_custom_colors() -> CustomThemeColors {
+        CustomThemeColors {
+            bg: "#1e1e2e".into(),
+            panel_bg: "#181825".into(),
+            panel_bg_alt: "#11111b".into(),
+            text: "#cdd6f4".into(),
+            text_muted: "#7f849c".into(),
+            border: "#313244".into(),
+            primary: "#89b4fa".into(),
+            primary_hover: "#b4befe".into(),
+            primary_foreground: "#1e1e2e".into(),
+            primary_soft: "rgba(137, 180, 250, 0.14)".into(),
+            primary_border: "rgba(137, 180, 250, 0.40)".into(),
+            bg_terminal: "#1e1e2e".into(),
+        }
+    }
+
+    #[test]
+    fn default_settings_have_no_custom_theme() {
+        let s = AppSettings::default();
+        assert!(s.general.custom_theme.is_none());
+    }
+
+    #[test]
+    fn custom_theme_serialization_roundtrip() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut s = AppSettings::default();
+        s.general.theme = "custom".into();
+        s.general.custom_theme = Some(CustomThemeConfig {
+            image_file: "abc12345.png".into(),
+            colors: sample_custom_colors(),
+            base_mode: "dark".into(),
+            ..Default::default()
+        });
+        save(tmp.path(), &s).unwrap();
+
+        // 同时创建图片文件，否则 load 会清除 custom_theme
+        let themes_dir = tmp.path().join("custom_themes");
+        fs::create_dir_all(&themes_dir).unwrap();
+        fs::write(themes_dir.join("abc12345.png"), b"fake png").unwrap();
+
+        let loaded = load(tmp.path());
+        assert_eq!(loaded.general.theme, "custom");
+        let custom = loaded
+            .general
+            .custom_theme
+            .expect("custom_theme should be present");
+        assert_eq!(custom.image_file, "abc12345.png");
+        assert_eq!(custom.base_mode, "dark");
+        assert_eq!(custom.colors, sample_custom_colors());
+        // 默认 alpha 值
+        assert_eq!(custom.panel_alpha, 82);
+        assert_eq!(custom.editor_alpha, 92);
+        assert_eq!(custom.mask_opacity, 20);
+    }
+
+    #[test]
+    fn custom_theme_skip_serialized_when_none() {
+        // custom_theme 为 None 时，序列化结果不应包含该字段
+        let s = AppSettings::default();
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("custom_theme"));
+    }
+
+    #[test]
+    fn old_config_without_custom_theme_loads_fine() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let v3 = r#"{"compiler":{"cpp_standard":"c++17","opt_level":"O0","warnings":"wall_extra","extra_args":"","compiler_path":null,"template":""},"runtime":{"compile_timeout_secs":10,"run_timeout_secs":5,"cpu_secs":5,"fsize_mb":10},"general":{"locale":"zh","theme":"dark","layout":"horizontal","auto_hide_panel":false},"editor":{"font_size":14,"theme":"vs-dark","terminal_font_size":13,"indent_style":"space","indent_size":4,"line_numbers":"on","enable_suggestions":true,"auto_closing_brackets":true,"auto_closing_quotes":true,"word_wrap":"on","minimap_enabled":false},"current_language":"cpp","schema_version":3}"#;
+        std::fs::write(tmp.path().join("settings.json"), v3).unwrap();
+        let s = load(tmp.path());
+        assert!(s.general.custom_theme.is_none());
+        assert_eq!(s.general.theme, "dark");
+    }
+
+    #[test]
+    fn load_clears_custom_theme_when_image_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut s = AppSettings::default();
+        s.general.theme = "custom".into();
+        s.editor.theme = "vs-dark".into();
+        s.general.custom_theme = Some(CustomThemeConfig {
+            image_file: "nonexistent.png".into(),
+            colors: sample_custom_colors(),
+            base_mode: "dark".into(),
+            ..Default::default()
+        });
+        save(tmp.path(), &s).unwrap();
+
+        // 不创建图片文件 → load 应清除 custom_theme 并回退到 dark
+        let loaded = load(tmp.path());
+        assert!(loaded.general.custom_theme.is_none());
+        assert_eq!(loaded.general.theme, "dark");
+        assert_eq!(loaded.editor.theme, "vs-dark");
+    }
+
+    #[test]
+    fn cleanup_orphan_themes_removes_unreferenced() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let themes_dir = tmp.path().join("custom_themes");
+        fs::create_dir_all(&themes_dir).unwrap();
+        fs::write(themes_dir.join("orphan.png"), b"").unwrap();
+        fs::write(themes_dir.join("referenced.png"), b"").unwrap();
+
+        let mut s = AppSettings::default();
+        s.general.custom_theme = Some(CustomThemeConfig {
+            image_file: "referenced.png".into(),
+            colors: sample_custom_colors(),
+            base_mode: "dark".into(),
+            ..Default::default()
+        });
+
+        cleanup_orphan_themes(tmp.path(), &s);
+
+        assert!(!themes_dir.join("orphan.png").exists());
+        assert!(themes_dir.join("referenced.png").exists());
+    }
+
+    #[test]
+    fn cleanup_orphan_themes_noop_when_dir_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let s = AppSettings::default();
+        // custom_themes 目录不存在，不应报错
+        cleanup_orphan_themes(tmp.path(), &s);
+    }
+
+    #[test]
+    fn cleanup_orphan_themes_noop_when_no_custom_theme() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let themes_dir = tmp.path().join("custom_themes");
+        fs::create_dir_all(&themes_dir).unwrap();
+        fs::write(themes_dir.join("orphan1.png"), b"").unwrap();
+        fs::write(themes_dir.join("orphan2.png"), b"").unwrap();
+
+        let s = AppSettings::default(); // custom_theme = None
+        cleanup_orphan_themes(tmp.path(), &s);
+
+        // 无引用 → 全部删除
+        assert!(!themes_dir.join("orphan1.png").exists());
+        assert!(!themes_dir.join("orphan2.png").exists());
+    }
+
+    #[test]
+    fn custom_theme_alpha_defaults_when_missing() {
+        // 老配置（无 alpha 字段）反序列化时用默认值
+        // 用 r##"..."## 避免 "# 提前结束 raw string
+        let json = r##"{
+            "image_file": "abc.png",
+            "colors": {
+                "bg": "#1e1e2e",
+                "panel_bg": "#181825",
+                "panel_bg_alt": "#11111b",
+                "text": "#cdd6f4",
+                "text_muted": "#7f849c",
+                "border": "#313244",
+                "primary": "#89b4fa",
+                "primary_hover": "#b4befe",
+                "primary_foreground": "#1e1e2e",
+                "primary_soft": "rgba(137, 180, 250, 0.14)",
+                "primary_border": "rgba(137, 180, 250, 0.40)",
+                "bg_terminal": "#1e1e2e"
+            },
+            "base_mode": "dark"
+        }"##;
+        let config: CustomThemeConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.panel_alpha, 82);
+        assert_eq!(config.editor_alpha, 92);
+        assert_eq!(config.mask_opacity, 20);
+    }
+
+    #[test]
+    fn custom_theme_alpha_roundtrip() {
+        // 自定义 alpha 值的序列化/反序列化保持
+        let config = CustomThemeConfig {
+            image_file: "test.png".into(),
+            colors: sample_custom_colors(),
+            base_mode: "dark".into(),
+            panel_alpha: 75,
+            editor_alpha: 88,
+            mask_opacity: 30,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: CustomThemeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.panel_alpha, 75);
+        assert_eq!(parsed.editor_alpha, 88);
+        assert_eq!(parsed.mask_opacity, 30);
     }
 }

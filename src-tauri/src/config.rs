@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::commands::compile_run::CompileScenario;
 use crate::error::AppError;
 use crate::settings::AppSettings;
 
@@ -13,8 +14,13 @@ pub struct CompilerConfig {
     pub compile_timeout: Duration,
     /// 运行超时
     pub run_timeout: Duration,
-    /// 编译参数（不含编译器路径、-o、源文件路径）
-    pub compile_args: Vec<String>,
+    /// 快速运行编译参数（用 compiler.opt_level，默认 O0）
+    pub run_args: Vec<String>,
+    /// 多样例测试编译参数（用 test.opt_level，默认 O2）
+    pub test_args: Vec<String>,
+    /// 多样例测试使用的优化级别（从 settings.test.opt_level 快照）
+    /// 用于 TestRunResult 回填，避免运行后配置变更导致 badge 显示失真
+    pub test_opt_level: String,
     /// 单例测试时间限制（毫秒），超过则该用例判失败
     pub test_time_limit_ms: u64,
 }
@@ -38,16 +44,34 @@ impl CompilerConfig {
         #[cfg(windows)]
         let compiler_path = strip_verbatim_prefix(&compiler_path);
 
-        // 构建编译参数（含黑名单校验）
-        let compile_args = crate::settings::build_compile_args(&settings.compiler)?;
+        // 构建两套编译参数（含黑名单校验）
+        // 快速运行用 compiler.opt_level（默认 O0），多样例测试用 test.opt_level（默认 O2）
+        let run_args = crate::settings::build_compile_args(
+            &settings.compiler,
+            &settings.compiler.opt_level,
+        )?;
+        let test_args = crate::settings::build_compile_args(
+            &settings.compiler,
+            &settings.test.opt_level,
+        )?;
 
         Ok(Self {
             compiler_path,
             compile_timeout: Duration::from_secs(settings.runtime.compile_timeout_secs),
             run_timeout: Duration::from_secs(settings.runtime.run_timeout_secs),
-            compile_args,
+            run_args,
+            test_args,
+            test_opt_level: settings.test.opt_level.clone(),
             test_time_limit_ms: settings.test.test_time_limit_ms,
         })
+    }
+
+    /// 按编译场景取对应参数
+    pub fn args_for(&self, scenario: CompileScenario) -> &[String] {
+        match scenario {
+            CompileScenario::Run => &self.run_args,
+            CompileScenario::Test => &self.test_args,
+        }
     }
 }
 
@@ -137,6 +161,29 @@ mod tests {
         let s = AppSettings::default();
         let config = CompilerConfig::from_settings(&s, None).unwrap();
         assert_eq!(config.test_time_limit_ms, 1000);
+    }
+
+    #[test]
+    fn config_from_settings_builds_two_arg_sets() {
+        // 默认配置：run_args 用 O0，test_args 用 O2
+        let s = AppSettings::default();
+        let config = CompilerConfig::from_settings(&s, None).unwrap();
+        assert!(config.run_args.contains(&"-O0".to_string()));
+        assert!(!config.run_args.contains(&"-O2".to_string()));
+        assert!(config.test_args.contains(&"-O2".to_string()));
+        assert!(!config.test_args.contains(&"-O0".to_string()));
+        // 公共参数应一致
+        assert_eq!(config.run_args[0], config.test_args[0]); // -std=c++17
+    }
+
+    #[test]
+    fn config_args_for_scenario() {
+        let s = AppSettings::default();
+        let config = CompilerConfig::from_settings(&s, None).unwrap();
+        // Run 场景取 run_args
+        assert_eq!(config.args_for(CompileScenario::Run), config.run_args);
+        // Test 场景取 test_args
+        assert_eq!(config.args_for(CompileScenario::Test), config.test_args);
     }
 
     #[cfg(windows)]

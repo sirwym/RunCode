@@ -86,7 +86,7 @@ import { useTabs } from "./hooks/useTabs";
 import { useTestSuite } from "./hooks/useTestSuite";
 import { useI18n } from "./hooks/useI18n";
 import { zh } from "./locales/zh";
-import type { AppSettings } from "./types";
+import type { AppSettings, CustomThemeConfig, CustomThemeColors } from "./types";
 
 // 简单的 t 函数
 function makeT() {
@@ -114,7 +114,7 @@ function makeSettings(overrides: Partial<AppSettings> = {}): AppSettings {
       compile_timeout_secs: 10, run_timeout_secs: 5, cpu_secs: 5, fsize_mb: 64,
     },
     general: { locale: "zh", theme: "dark", layout: "horizontal", auto_hide_panel: false },
-    test: { fsize_mb: 10, test_time_limit_ms: 1000 },
+    test: { fsize_mb: 10, test_time_limit_ms: 1000, opt_level: "O2" },
     editor: {
       font_size: 14, theme: "vs-dark", terminal_font_size: 14,
       indent_style: "space", indent_size: 4, line_numbers: "on",
@@ -133,6 +133,9 @@ function resetStores(settings: AppSettings) {
     saving: false,
     load: vi.fn(),
     save: vi.fn().mockResolvedValue(undefined),
+    themePreview: null,
+    setThemePreview: vi.fn((preview) => useSettings.setState({ themePreview: preview })),
+    clearThemePreview: vi.fn(() => useSettings.setState({ themePreview: null })),
   });
   useRunManager.setState({
     activeRunId: null,
@@ -144,6 +147,7 @@ function resetStores(settings: AppSettings) {
     testProgress: null,
     ptyRunId: null,
     ptyExitInfo: null,
+    ptyStartTime: null,
     compileError: null,
     activeTabId: null,
     resultsByTab: {},
@@ -407,5 +411,361 @@ describe("面板关闭按钮联动 auto_hide_panel 设置", () => {
     const savedSettings = saveMock.mock.calls[0][0] as AppSettings;
     expect(savedSettings.general.auto_hide_panel).toBe(true);
     expect(collapseSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ============ buildCustomThemeCssText 纯函数测试 ============
+// 验证动态 CSS 变量生成的关键约束：
+// - 编辑器 surface 用独立变量 --editor-surface-bg（单层合成）
+// - 不得用不透明 --bg-terminal 覆盖编辑器 surface
+// - editorAlpha 仅经 --editor-surface-bg 一次应用
+// - Monaco editor.background 透明由 Editor.tsx 控制（见 Editor.test.ts）
+
+const { buildCustomThemeCssText } = await import("./App");
+
+function makeCustomThemeColors(overrides: Partial<CustomThemeColors> = {}): CustomThemeColors {
+  return {
+    bg: "#1e1e2e",
+    panel_bg: "#181825",
+    panel_bg_alt: "#11111b",
+    text: "#fafafa",
+    text_muted: "#a3a3a3",
+    border: "#45475a",
+    primary: "#3b65b8",
+    primary_hover: "#4a78c9",
+    primary_foreground: "#ffffff",
+    primary_soft: "rgba(59,101,184,0.14)",
+    primary_border: "rgba(59,101,184,0.40)",
+    bg_terminal: "#1e1e2e",
+    ...overrides,
+  };
+}
+
+function makeCustomThemeConfig(overrides: Partial<CustomThemeConfig> = {}): CustomThemeConfig {
+  return {
+    image_file: "test.png",
+    colors: makeCustomThemeColors(),
+    base_mode: "dark",
+    panel_alpha: 82,
+    editor_alpha: 92,
+    mask_opacity: 20,
+    ...overrides,
+  };
+}
+
+describe("buildCustomThemeCssText 编辑器 surface 单层透明度", () => {
+  it("editor_alpha=72 时，--editor-surface-bg 为 rgba(..., 0.72)", () => {
+    const custom = makeCustomThemeConfig({ editor_alpha: 72 });
+    const css = buildCustomThemeCssText(custom, null);
+    // bg_terminal=#1e1e2e → rgb(30, 30, 46)
+    expect(css).toContain("--editor-surface-bg: rgba(30, 30, 46, 0.72)");
+  });
+
+  it("editor_alpha=100 时，--editor-surface-bg 为 rgba(..., 1)（完全不透明）", () => {
+    const custom = makeCustomThemeConfig({ editor_alpha: 100 });
+    const css = buildCustomThemeCssText(custom, null);
+    expect(css).toContain("--editor-surface-bg: rgba(30, 30, 46, 1)");
+  });
+
+  it("editor_alpha=70 / 85 / 92 生成可辨识的差异值", () => {
+    const css70 = buildCustomThemeCssText(makeCustomThemeConfig({ editor_alpha: 70 }), null);
+    const css85 = buildCustomThemeCssText(makeCustomThemeConfig({ editor_alpha: 85 }), null);
+    const css92 = buildCustomThemeCssText(makeCustomThemeConfig({ editor_alpha: 92 }), null);
+    expect(css70).toContain("rgba(30, 30, 46, 0.7)");
+    expect(css85).toContain("rgba(30, 30, 46, 0.85)");
+    expect(css92).toContain("rgba(30, 30, 46, 0.92)");
+    // 三者应互不相同
+    const extract = (s: string) => s.match(/--editor-surface-bg: ([^;]+);/)?.[1];
+    expect(extract(css70)).not.toBe(extract(css85));
+    expect(extract(css85)).not.toBe(extract(css92));
+    expect(extract(css70)).not.toBe(extract(css92));
+  });
+
+  it("--editor-surface-bg 使用 bg_terminal 的 RGB，而非 bg 的 RGB", () => {
+    const custom = makeCustomThemeConfig({
+      colors: makeCustomThemeColors({
+        bg: "#0a0a0a",
+        bg_terminal: "#1e1e2e",
+      }),
+    });
+    const css = buildCustomThemeCssText(custom, null);
+    // bg_terminal=#1e1e2e → rgb(30, 30, 46)，不是 bg 的 rgb(10, 10, 10)
+    expect(css).toContain("--editor-surface-bg: rgba(30, 30, 46, 0.92)");
+    expect(css).not.toContain("--editor-surface-bg: rgba(10, 10, 10");
+  });
+});
+
+describe("buildCustomThemeCssText 不得用不透明 --bg-terminal 覆盖编辑器 surface", () => {
+  it("--bg-terminal 仍以纯色 HEX 注入（供非编辑器场景兜底）", () => {
+    const custom = makeCustomThemeConfig();
+    const css = buildCustomThemeCssText(custom, null);
+    // --bg-terminal 应为纯色 HEX 值
+    expect(css).toContain("--bg-terminal: #1e1e2e");
+  });
+
+  it("动态样式中 --bg-terminal 不带 alpha 通道（不作为编辑器 surface）", () => {
+    const custom = makeCustomThemeConfig({ editor_alpha: 72 });
+    const css = buildCustomThemeCssText(custom, null);
+    // 提取 --bg-terminal 行，验证是纯 HEX 而非 rgba()
+    const bgTerminalLine = css.match(/--bg-terminal: ([^;]+);/);
+    expect(bgTerminalLine).not.toBeNull();
+    expect(bgTerminalLine![1].trim()).toBe("#1e1e2e");
+    expect(bgTerminalLine![1]).not.toContain("rgba");
+  });
+
+  it("动态样式中 --editor-surface-bg 为半透明 rgba，与 --bg-terminal 是不同变量", () => {
+    const custom = makeCustomThemeConfig({ editor_alpha: 72 });
+    const css = buildCustomThemeCssText(custom, null);
+    const editorSurfaceLine = css.match(/--editor-surface-bg: ([^;]+);/);
+    const bgTerminalLine = css.match(/--bg-terminal: ([^;]+);/);
+    expect(editorSurfaceLine).not.toBeNull();
+    expect(bgTerminalLine).not.toBeNull();
+    // editor-surface-bg 是 rgba 半透明
+    expect(editorSurfaceLine![1]).toContain("rgba");
+    expect(editorSurfaceLine![1]).toContain("0.72");
+    // bg-terminal 是纯 HEX
+    expect(bgTerminalLine![1].trim()).toBe("#1e1e2e");
+    // 两者值不同
+    expect(editorSurfaceLine![1].trim()).not.toBe(bgTerminalLine![1].trim());
+  });
+
+  it("动态样式不包含 --bg-terminal-alpha 变量（已废弃该映射路径）", () => {
+    const custom = makeCustomThemeConfig();
+    const css = buildCustomThemeCssText(custom, null);
+    expect(css).not.toContain("--bg-terminal-alpha");
+  });
+});
+
+describe("buildCustomThemeCssText panel / mask / 图片 URL", () => {
+  it("panel_alpha=82 → --panel-bg-alpha 包含 0.82", () => {
+    const custom = makeCustomThemeConfig({ panel_alpha: 82 });
+    const css = buildCustomThemeCssText(custom, null);
+    expect(css).toContain("--panel-bg-alpha: rgba(30, 30, 46, 0.82)");
+  });
+
+  it("mask_opacity=35 → --mask-opacity 为 0.35", () => {
+    const custom = makeCustomThemeConfig({ mask_opacity: 35 });
+    const css = buildCustomThemeCssText(custom, null);
+    expect(css).toContain("--mask-opacity: 0.35");
+  });
+
+  it("bgImageUrl=null → --bg-image: none", () => {
+    const custom = makeCustomThemeConfig();
+    const css = buildCustomThemeCssText(custom, null);
+    expect(css).toContain("--bg-image: none");
+  });
+
+  it("bgImageUrl 非 null → --bg-image: url(\"...\")", () => {
+    const custom = makeCustomThemeConfig();
+    const css = buildCustomThemeCssText(custom, "blob:http://localhost/abc");
+    expect(css).toContain('--bg-image: url("blob:http://localhost/abc")');
+  });
+});
+
+// ============ App 主题预览渲染测试 ============
+// 验证 App 读取 useSettings.themePreview 并驱动 DOM：
+// - themePreview 存在时 data-theme="custom"，注入 --editor-surface-bg
+// - themePreview 清除时回退到持久化 settings 主题
+// - 滑动期间 save_settings 调用次数为 0（由 SettingsPanel 测试覆盖，此处验证 App 不主动 save）
+
+describe("App 主题预览渲染（themePreview 优先于持久化 settings）", () => {
+  beforeEach(() => {
+    collapseSpy.mockClear();
+    expandSpy.mockClear();
+    listenMock.mockClear();
+    resetStores(makeSettings());
+  });
+
+  it("themePreview 存在时，document root 设置 data-theme=custom", async () => {
+    const settings = makeSettings();
+    resetStores(settings);
+    render(<App />);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 初始无预览，data-theme 应为持久化主题（dark）
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+
+    // 设置 themePreview：App 应强制 data-theme=custom
+    const customTheme = makeCustomThemeConfig({ editor_alpha: 72 });
+    act(() => {
+      useSettings.setState({
+        themePreview: { customTheme },
+      });
+    });
+
+    expect(document.documentElement.getAttribute("data-theme")).toBe("custom");
+  });
+
+  it("themePreview 存在时，注入 --editor-surface-bg 反映预览的 editor_alpha", async () => {
+    const settings = makeSettings();
+    resetStores(settings);
+    render(<App />);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 设置 themePreview：editor_alpha=72
+    const customTheme = makeCustomThemeConfig({ editor_alpha: 72 });
+    act(() => {
+      useSettings.setState({
+        themePreview: { customTheme },
+      });
+    });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const styleEl = document.getElementById("custom-theme-vars");
+    expect(styleEl).not.toBeNull();
+    const css = styleEl!.textContent ?? "";
+    // bg_terminal=#1e1e2e → rgb(30, 30, 46)，alpha=0.72
+    expect(css).toContain("--editor-surface-bg: rgba(30, 30, 46, 0.72)");
+    // 同时设置 data-base-mode
+    expect(document.documentElement.getAttribute("data-base-mode")).toBe("dark");
+  });
+
+  it("themePreview 变化时，--editor-surface-bg 实时更新（无需保存）", async () => {
+    const settings = makeSettings();
+    resetStores(settings);
+    render(<App />);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 模拟滑块拖动：themePreview 从 72 → 85 → 92
+    for (const alpha of [72, 85, 92]) {
+      const customTheme = makeCustomThemeConfig({ editor_alpha: alpha });
+      act(() => {
+        useSettings.setState({
+          themePreview: { customTheme },
+        });
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const styleEl = document.getElementById("custom-theme-vars");
+      expect(styleEl).not.toBeNull();
+      const css = styleEl!.textContent ?? "";
+      expect(css).toContain(`rgba(30, 30, 46, 0.${alpha})`);
+    }
+  });
+
+  it("themePreview 期间 save 调用次数为 0（App 不主动保存预览值）", async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const settings = makeSettings();
+    resetStores(settings);
+    useSettings.setState({ save: saveMock });
+
+    render(<App />);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 模拟多次滑块拖动
+    for (const alpha of [72, 85, 92, 100]) {
+      const customTheme = makeCustomThemeConfig({ editor_alpha: alpha });
+      act(() => {
+        useSettings.setState({ themePreview: { customTheme } });
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    }
+
+    // App 不应主动调用 save（预览值只在用户点保存时落盘）
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it("清除 themePreview 后，data-theme 回退到持久化 settings 主题", async () => {
+    const settings = makeSettings(); // theme: dark
+    resetStores(settings);
+    render(<App />);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 设置预览
+    act(() => {
+      useSettings.setState({
+        themePreview: { customTheme: makeCustomThemeConfig() },
+      });
+    });
+    expect(document.documentElement.getAttribute("data-theme")).toBe("custom");
+
+    // 清除预览（模拟取消/关闭/Escape）
+    act(() => {
+      useSettings.setState({ themePreview: null });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 回退到持久化主题
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  });
+
+  it("清除 themePreview 后，--editor-surface-bg 注入的 style 被移除", async () => {
+    const settings = makeSettings(); // theme: dark（非 custom）
+    resetStores(settings);
+    render(<App />);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 设置预览：注入 style
+    act(() => {
+      useSettings.setState({
+        themePreview: { customTheme: makeCustomThemeConfig() },
+      });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(document.getElementById("custom-theme-vars")).not.toBeNull();
+
+    // 清除预览：style 应被移除
+    act(() => {
+      useSettings.setState({ themePreview: null });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(document.getElementById("custom-theme-vars")).toBeNull();
+  });
+
+  it("themePreview.imageUrl 非空时，--bg-image 用 blob URL（新图片预览路径）", async () => {
+    const settings = makeSettings();
+    resetStores(settings);
+    render(<App />);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 模拟新导入图片：themePreview 带 imageUrl
+    const customTheme = makeCustomThemeConfig({ editor_alpha: 85 });
+    act(() => {
+      useSettings.setState({
+        themePreview: { customTheme, imageUrl: "blob:http://localhost/preview.png" },
+      });
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const styleEl = document.getElementById("custom-theme-vars");
+    expect(styleEl).not.toBeNull();
+    const css = styleEl!.textContent ?? "";
+    expect(css).toContain('--bg-image: url("blob:http://localhost/preview.png")');
+    expect(css).toContain("--editor-surface-bg: rgba(30, 30, 46, 0.85)");
   });
 });

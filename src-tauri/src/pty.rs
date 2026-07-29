@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -15,8 +15,11 @@ pub struct PtySession {
     /// 从 child clone 的独立 killer，供 stop_pty_run 使用（避免与 wait 竞争锁）
     killer: Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>,
     /// 子进程 PID。Unix 上用于 kill(-pid) 杀整个进程组（portable_pty 后端 setsid
-    /// 创建新会话，子进程是组长，孙进程同组）；Windows 上保留 killer 行为。
+    /// 创建新会话，子进程是组长，孙进程同组）；Windows 上用于查询进程内存峰值。
     #[cfg(unix)]
+    pid: Option<u32>,
+    /// Windows 子进程 PID，用于查询进程内存峰值（PeakWorkingSetSize）。
+    #[cfg(windows)]
     pid: Option<u32>,
     /// 持有临时编译目录，drop 时自动清理
     _work_dir: TempDir,
@@ -47,13 +50,14 @@ impl PtySession {
         master: Box<dyn MasterPty + Send>,
         writer: Box<dyn Write + Send>,
         killer: Box<dyn ChildKiller + Send + Sync>,
-        _pid: Option<u32>,
+        pid: Option<u32>,
         work_dir: TempDir,
     ) -> Self {
         Self {
             master: Arc::new(Mutex::new(master)),
             writer: Arc::new(Mutex::new(writer)),
             killer: Mutex::new(Some(killer)),
+            pid,
             _work_dir: work_dir,
         }
     }
@@ -105,12 +109,15 @@ impl PtySession {
 /// - PtyManager 负责管理 PTY 会话的生命周期（写入、resize、kill）
 pub struct PtyManager {
     sessions: Mutex<HashMap<String, PtySession>>,
+    /// 已收到首次输入的 run_id 集合（用于 pty_first_input 事件去重）
+    first_input_emitted: Mutex<HashSet<String>>,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
+            first_input_emitted: Mutex::new(HashSet::new()),
         }
     }
 
@@ -124,12 +131,38 @@ impl PtyManager {
         if let Ok(mut sessions) = self.sessions.lock() {
             sessions.remove(run_id);
         }
+        // 清理首次输入标记
+        if let Ok(mut set) = self.first_input_emitted.lock() {
+            set.remove(run_id);
+        }
+    }
+
+    /// 标记首次输入并返回是否需要 emit 事件（true=首次，false=已标记过）
+    pub fn mark_first_input(&self, run_id: &str) -> bool {
+        if let Ok(mut set) = self.first_input_emitted.lock() {
+            if set.contains(run_id) {
+                return false;
+            }
+            set.insert(run_id.to_string());
+            return true;
+        }
+        false
     }
 
     pub fn write_stdin(&self, run_id: &str, data: &[u8]) -> Result<(), String> {
         let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
         let session = sessions.get(run_id).ok_or("PTY 会话不存在")?;
         session.write_stdin(data)
+    }
+
+    /// 获取 PTY 子进程 PID（用于 Windows 内存查询）
+    pub fn get_pid(&self, run_id: &str) -> Option<u32> {
+        if let Ok(sessions) = self.sessions.lock() {
+            if let Some(session) = sessions.get(run_id) {
+                return session.pid;
+            }
+        }
+        None
     }
 
     pub fn resize(&self, run_id: &str, cols: u16, rows: u16) -> Result<(), String> {

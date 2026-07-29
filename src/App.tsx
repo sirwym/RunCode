@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import {
   PanelGroup,
   Panel,
@@ -22,13 +22,14 @@ import { useSettings } from "./hooks/useSettings";
 import { useI18n, getT } from "./hooks/useI18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { AppErrorPayload, AppSettings, FormatResult } from "./types";
+import type { AppErrorPayload, AppSettings, CustomThemeConfig, FormatResult } from "./types";
 import {
   getEffectiveTheme,
   type EffectiveTheme,
   type SettingsTheme,
 } from "./utils/theme";
 import { parseGccErrors } from "./utils/compileErrors";
+import { hexToRgb } from "./utils/colorExtract";
 
 type PanelTab = "tests" | "terminal";
 
@@ -37,6 +38,49 @@ const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 32;
 const FONT_SIZE_STEP = 2;
 const FONT_SIZE_DEFAULT = 14;
+
+/**
+ * 构建 custom 主题的动态 CSS 变量文本（注入到 <style id="custom-theme-vars">）。
+ *
+ * 纯函数，便于单元测试。关键约束：
+ * - 编辑器 surface 用独立变量 `--editor-surface-bg`（单层合成），
+ *   不得借用或循环覆盖 `--bg-terminal` / `--bg-terminal-alpha`。
+ * - `--bg-terminal` 仍按纯色注入（供非编辑器场景兜底），但 `.editor-container`
+ *   在 global.css 中只读 `--editor-surface-bg`。
+ * - editorAlpha 仅经 `--editor-surface-bg` 一次应用，Monaco editor.background 保持透明。
+ */
+export function buildCustomThemeCssText(
+  custom: CustomThemeConfig,
+  bgImageUrl: string | null,
+): string {
+  const c = custom.colors;
+  const [pr, pg, pb] = hexToRgb(c.primary);
+  const [br, bgg, bb] = hexToRgb(c.bg);
+  const [tr, tg, tb] = hexToRgb(c.bg_terminal);
+  const panelA = custom.panel_alpha / 100;
+  const editorA = custom.editor_alpha / 100;
+  const maskA = custom.mask_opacity / 100;
+
+  return `:root[data-theme="custom"] {
+  --primary: ${c.primary};
+  --primary-hover: ${c.primary_hover};
+  --primary-foreground: ${c.primary_foreground};
+  --primary-soft: rgba(${pr}, ${pg}, ${pb}, 0.14);
+  --primary-border: rgba(${pr}, ${pg}, ${pb}, 0.40);
+  --focus-ring: ${c.primary};
+  --selection: rgba(${pr}, ${pg}, ${pb}, 0.30);
+  --bg: ${c.bg};
+  --border: ${c.border};
+  --text: ${c.text};
+  --text-muted: ${c.text_muted};
+  --bg-terminal: ${c.bg_terminal};
+  --panel-bg-alpha: rgba(${br}, ${bgg}, ${bb}, ${panelA});
+  --panel-bg-alt-alpha: rgba(${br}, ${bgg}, ${bb}, ${Math.min(panelA + 0.03, 1)});
+  --editor-surface-bg: rgba(${tr}, ${tg}, ${tb}, ${editorA});
+  --bg-image: ${bgImageUrl ? `url("${bgImageUrl}")` : "none"};
+  --mask-opacity: ${maskA};
+}`;
+}
 
 function App() {
   const t = useI18n((s) => s.t);
@@ -70,6 +114,7 @@ function App() {
   const onPtyExit = useRunManager((s) => s.onPtyExit);
   const ptyRunId = useRunManager((s) => s.ptyRunId);
   const compileError = useRunManager((s) => s.compileError);
+  const compileWarning = useRunManager((s) => s.compileWarning);
   const strict = useTestOptions((s) => s.strict);
 
   // 读取设置（用于 StatusBar / Editor / Terminal 等）
@@ -124,11 +169,20 @@ function App() {
     setSystemTheme(getEffectiveTheme(settings?.general.theme as SettingsTheme | undefined));
   }, [settings?.general.theme]);
 
+  // 临时主题预览（来自 SettingsPanel 滑块拖动 / 新导入图片预览）
+  // 优先于持久化 settings 读取，让主界面立即反映未保存的主题变化
+  const themePreview = useSettings((s) => s.themePreview);
+
   // 计算最终生效的主题（传给 Monaco / xterm）
-  const effectiveTheme: EffectiveTheme =
-    settings?.general.theme === "system"
+  // 预览激活时强制 custom（用户在 SettingsPanel 调整 custom 主题或预览新图片）
+  const effectiveTheme: EffectiveTheme = themePreview
+    ? "custom"
+    : settings?.general.theme === "system"
       ? systemTheme
       : (settings?.general.theme as EffectiveTheme) ?? "dark";
+
+  // 计算实际生效的 custom 主题配置（预览优先，无预览时回退持久化）
+  const effectiveCustomTheme = themePreview?.customTheme ?? settings?.general.custom_theme ?? null;
 
   const activeTab = tabs.find((t) => t.id === activeId) ?? null;
 
@@ -263,10 +317,68 @@ function App() {
   formatRef.current = handleFormat;
 
   // 应用主题到根元素
+  // 预览存在时强制用 "custom"（即使持久化 settings 还没切到 custom）
   useEffect(() => {
-    const theme = settings?.general.theme ?? "dark";
+    const theme = themePreview
+      ? "custom"
+      : settings?.general.theme ?? "dark";
     document.documentElement.setAttribute("data-theme", theme);
-  }, [settings?.general.theme]);
+  }, [settings?.general.theme, themePreview]);
+
+  // 动态注入 custom 主题 CSS 变量 + 同步 data-base-mode
+  // - effectiveCustomTheme 存在：注入 <style id="custom-theme-vars">
+  // - 否则：移除 <style>，清除 data-base-mode
+  // 用 JSON.stringify(effectiveCustomTheme) 作为依赖键，避免对象引用变化导致无限循环
+  const customThemeKey = effectiveCustomTheme
+    ? JSON.stringify(effectiveCustomTheme) + "|" + (themePreview?.imageUrl ?? "")
+    : "";
+
+  // 图片背景 URL：
+  // - 预览阶段：直接用 themePreview.imageUrl（blob: URL，新导入未保存的图片）
+  // - 持久化阶段：后端 get_custom_theme_image_path → convertFileSrc 转 asset:// URL
+  const [persistedBgImageUrl, setPersistedBgImageUrl] = useState<string | null>(null);
+  useEffect(() => {
+    const custom = settings?.general.custom_theme;
+    if (settings?.general.theme === "custom" && custom) {
+      void invoke<string>("get_custom_theme_image_path", {
+        imageFile: custom.image_file,
+      })
+        .then((path) => setPersistedBgImageUrl(convertFileSrc(path)))
+        .catch(() => setPersistedBgImageUrl(null));
+    } else {
+      setPersistedBgImageUrl(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.general.theme, settings?.general.custom_theme?.image_file]);
+
+  // 实际生效的背景图 URL（预览 blob URL 优先）
+  const bgImageUrl = themePreview?.imageUrl ?? persistedBgImageUrl;
+
+  useEffect(() => {
+    const custom = effectiveCustomTheme;
+    const styleId = "custom-theme-vars";
+    const existing = document.getElementById(styleId);
+
+    if (custom) {
+      // 复用纯函数 buildCustomThemeCssText，避免运行时与单元测试脱钩
+      const cssText = buildCustomThemeCssText(custom, bgImageUrl);
+      if (existing) {
+        existing.textContent = cssText;
+      } else {
+        const style = document.createElement("style");
+        style.id = styleId;
+        style.textContent = cssText;
+        document.head.appendChild(style);
+      }
+      // 同步 data-base-mode（global.css 中 :root[data-theme="custom"][data-base-mode="light"] 依赖此属性）
+      document.documentElement.setAttribute("data-base-mode", custom.base_mode);
+    } else {
+      // 切回预设或 custom_theme 缺失：移除动态 style + 清除 data-base-mode
+      if (existing) existing.remove();
+      document.documentElement.removeAttribute("data-base-mode");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.general.theme, customThemeKey, bgImageUrl]);
 
   // 监听菜单事件
   useEffect(() => {
@@ -403,6 +515,22 @@ function App() {
     return () => unlistens.forEach((u) => u());
   }, []);
 
+  // 监听 PTY 首次输入事件：重置计时起点为用户首次输入时刻
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    const setup = async () => {
+      unlisten = await listen<string>("pty_first_input", (e) => {
+        if (e.payload === useRunManager.getState().activeRunId) {
+          useRunManager.getState().markPtyFirstInput();
+        }
+      });
+    };
+    void setup();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const handleRun = useCallback(() => {
     if (!activeTab) return;
     setTab("terminal");
@@ -420,8 +548,8 @@ function App() {
   }, [activeTab, suiteId, runTests, strict, autoHide]);
 
   const handlePtyExit = useCallback(
-    (exitCode: number | null, killedBy: string | null) => {
-      onPtyExit({ exitCode, killedBy });
+    (exitCode: number | null, killedBy: string | null, maxRssKb: number | null) => {
+      onPtyExit({ exitCode, killedBy }, maxRssKb);
     },
     [onPtyExit],
   );
@@ -481,6 +609,12 @@ function App() {
             onCursorPositionChange={handleCursorPositionChange}
             settings={settings?.editor}
             theme={effectiveTheme}
+            customColors={effectiveCustomTheme?.colors}
+            baseMode={
+              effectiveCustomTheme
+                ? (effectiveCustomTheme.base_mode as "light" | "dark")
+                : undefined
+            }
           />
         </Panel>
         <PanelResizeHandle
@@ -539,7 +673,19 @@ function App() {
                 onExit={handlePtyExit}
                 fontSize={settings?.editor.terminal_font_size}
                 theme={effectiveTheme}
+                customColors={effectiveCustomTheme?.colors}
+                panelAlpha={
+                  effectiveCustomTheme
+                    ? effectiveCustomTheme.panel_alpha / 100
+                    : undefined
+                }
+                baseMode={
+                  effectiveCustomTheme
+                    ? (effectiveCustomTheme.base_mode as "light" | "dark")
+                    : undefined
+                }
                 compileError={compileError}
+                compileWarning={compileWarning}
                 onFocusChange={(focused) => { terminalFocusedRef.current = focused; }}
                 visible={tab === "terminal"}
               />

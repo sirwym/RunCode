@@ -37,7 +37,7 @@
 - 标志像素统计确认主色为 `#365EAA`（RunCode Slate），与 VS Code 默认蓝 `#007ACC` 有明显区分，建立独立品牌识别
 - Graphite 中性灰继承 [ADR-0002](0002-lyra-style-jetbrains-mono.md) 的 Lyra 风格，保持教学严肃审美
 - 令牌系统覆盖 CSS / Tailwind / Monaco / xterm 四层，单一来源便于维护
-- 持久化设置仍保存 `vs-dark` / `vs` / `hc-black`，渲染层映射到 `runcode-*` 继承主题，零迁移成本
+- 持久化设置 `editor.theme` 字段保留但渲染层忽略，由 `general.theme` 统一驱动，零迁移成本
 
 ### 品牌系统
 
@@ -77,7 +77,7 @@
   - 有对应测试文件（`Editor.test.ts` / `Terminal.test.ts`）验证颜色值精确性
   - Monaco `colors` 字段仅接受 HEX（3/4/6/8 位），禁止 `rgba()`，半透明色使用 8 位 HEX（`#RRGGBBAA`）
 - **令牌同步**：`tailwind.css` 的 `@theme inline` 必须与 `global.css` 令牌一一对应
-- **Monaco 渲染层映射**：持久化值 `vs-dark` / `vs` / `hc-black` 经 `mapMonacoTheme` 映射到 `runcode-dark` / `runcode-light` / `hc-black`，禁止修改持久化值
+- **Monaco 渲染层映射**：`editor.theme` 字段已废弃（保留在 schema 但渲染层不读），渲染层由 `general.theme` 派生的 `effectiveTheme` 决定，经 `mapMonacoTheme` 映射到 `runcode-dark` / `runcode-light`。`hc-black` 不再暴露给用户，老配置里的值会被忽略
 - **xterm 限定覆盖**：仅调整光标、选区、ANSI blue / brightBlue，其他 ANSI 颜色与终端行为保持不变
 - **图标资产冻结**：当前蓝色图标是本 ADR 生效前完成的一次性品牌迁移结果；ADR 生效后 `src-tauri/icons/` 全部资产冻结，不得重新导出或调整几何
 - **主色采样基准**：品牌基准色 `#365EAA` 来自 `src-tauri/icons/128x128.png` 中最大的非白色精确像素值；Graphite 与 Code Teal 是为品牌系统选定的辅助色，并非采样自图标

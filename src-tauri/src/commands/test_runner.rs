@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
 
-use crate::commands::compile_run::{compile_only, load_config, RunStage};
+use crate::commands::compile_run::{compile_only, load_config, CompileScenario, RunStage};
 use crate::error::AppError;
 use crate::run_manager::{RunKind, RunManager};
 use crate::runner::{run_with_limits, KillReason, ResourceLimits};
@@ -37,6 +37,8 @@ pub struct TestRunResult {
     pub stage: RunStage,
     pub compile_stdout: String,
     pub compile_stderr: String,
+    /// 本次测试编译实际使用的优化级别（运行开始时快照）
+    pub used_opt_level: String,
     pub results: Vec<TestCaseResult>,
 }
 
@@ -175,9 +177,9 @@ async fn run_tests_inner(
     let work_dir = tempfile::TempDir::new()?;
     let work_path = work_dir.path().to_path_buf();
 
-    // 编译（复用 compile_only）
-    let exe_path = match compile_only(code, config, &work_path, limits, cancel_rx.take()).await? {
-        crate::commands::compile_run::CompileResult::Success(p) => p,
+    // 编译（复用 compile_only，测试场景用 test.opt_level）
+    let exe_path = match compile_only(code, config, CompileScenario::Test, &work_path, limits, cancel_rx.take()).await? {
+        crate::commands::compile_run::CompileResult::Success { exe_path, .. } => exe_path,
         crate::commands::compile_run::CompileResult::Failed {
             stdout,
             stderr,
@@ -202,6 +204,7 @@ async fn run_tests_inner(
                 stage: RunStage::CompileFailed,
                 compile_stdout: stdout,
                 compile_stderr: stderr,
+                used_opt_level: config.test_opt_level.clone(),
                 results: vec![],
             });
         }
@@ -336,6 +339,7 @@ async fn run_tests_inner(
         stage: RunStage::Ran,
         compile_stdout: String::new(),
         compile_stderr: String::new(),
+        used_opt_level: config.test_opt_level.clone(),
         results,
     })
 }

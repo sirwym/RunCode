@@ -31,7 +31,10 @@ pub use menu_cmd::update_view_menu_state;
 pub use parser_cmd::extract_code_symbols;
 pub use pty_run::{resize_pty, start_pty_run, stop_pty_run, write_pty_stdin};
 pub use recent_cmd::{add_recent_file, clear_recent_files, get_recent_files, remove_recent_file};
-pub use settings_cmd::{get_settings, save_settings};
+pub use settings_cmd::{
+    delete_custom_theme_image, get_custom_theme_image_path, get_settings, read_file_bytes,
+    save_custom_theme_image, save_settings,
+};
 pub use test_runner::run_tests;
 pub use test_suite_cmd::{
     add_test_case, create_test_suite, delete_test_suite, find_or_create_suite_by_doc_path,
