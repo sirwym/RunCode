@@ -2,14 +2,13 @@
 # RunCode Windows 一键构建脚本
 #
 # 流程：
-#   1. 构建前端（pnpm build）
-#   2. 构建 Tauri NSIS 安装包（pnpm tauri build）
-#   3. 输出产物路径和体积
+#   1. 构建 Tauri NSIS 安装包（pnpm tauri build，会自动触发 beforeBuildCommand: pnpm build）
+#   2. 输出产物路径和体积
 #
 # TDM-GCC 已内置并提交到仓库（src-tauri/resources/tdm-gcc/），clone 后即用，无需额外准备。
 #
 # 用法：在 Windows 上执行 `./scripts/build-windows.ps1`
-# 产出：src-tauri/target/release/bundle/nsis/RunCode_0.1.0_x64-setup.exe
+# 产出：src-tauri/target/release/bundle/nsis/RunCode_0.1.2_x64-setup.exe
 
 set-strictmode -version latest
 $ErrorActionPreference = "stop"
@@ -22,18 +21,12 @@ write-host ""
 write-host "✓ TDM-GCC 已就绪: src-tauri/resources/tdm-gcc/bin/g++.exe" -foregroundcolor green
 write-host ""
 
-# 1. 构建前端
-write-host "=== 构建前端 ===" -foregroundcolor yellow
-pnpm build
-write-host "✓ 前端构建完成"
-write-host ""
-
-# 2. 构建 Tauri（NSIS 安装包）
+# 1. 构建 Tauri（NSIS 安装包，会自动触发前端构建）
 write-host "=== 构建 Tauri (NSIS) ===" -foregroundcolor yellow
 pnpm tauri build
 write-host ""
 
-# 4. 输出产物路径
+# 2. 输出产物路径
 write-host "=== 构建完成 ===" -foregroundcolor cyan
 $nsisPath = get-childitem "src-tauri/target/release/bundle/nsis/*.exe" -erroraction silentlycontinue | select-object -first 1
 if ($nsisPath) {

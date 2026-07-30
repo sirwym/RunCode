@@ -17,22 +17,23 @@
 ## 特性
 
 - **原生桌面体验** — macOS + Windows 双平台，Tauri 2 + Rust，无 Electron 包袱，体积小启动快
-- **Monaco 编辑器** — VS Code 同款，教学友好的语法高亮 / 括号补全
+- **Monaco 编辑器** — VS Code 同款，教学友好的语法高亮 / 括号补全 / 代码补全，内置中文本地化
+- **C++ 速查表** — 内置常用语法速查，快速查阅 STL 容器、算法、IO 等教学常用代码片段
 - **多样例测试** — 一次性运行多组样例，支持 stdin / expected 文件导入
 - **时间限制判定** — 单例超时判失败（OI 友好，默认 1000ms，可配置）
 - **实时终端** — PTY 终端支持交互式输入（macOS forkpty / Windows ConPTY）
 - **代码格式化** — tree-sitter 解析 + 内置 formatter
 - **Lyra 全直角风格** — Graphite 中性灰 + RunCode Slate 品牌交互色，UI 与代码统一 JetBrains Mono（详见 [ADR-0006](docs/adr/0006-runcode-brand-color-system.md)）
 - **中英文界面切换** — 编辑器界面支持中 / 英双语
-- **主题切换** — Dark / Light / System 跟随系统
+- **主题切换** — Dark / Light / System 跟随系统，支持自定义图片主题
 - **可折叠面板** — 左右 / 上下分栏自由切换
 
 ## 性能与轻量化
 
 基于 Tauri 2 + Rust，相比 Electron 方案显著轻量：
 
-- **安装包体积**：~10MB 级（macOS DMG）/ ~15MB 级（Windows NSIS，含内置 TDM-GCC）
-- **运行内存**：主进程 ~35MB；完整实例（含 WebKit/WebView2 + Monaco）macOS ~260MB（对比 Electron 同类应用通常 300MB+，仍更轻量）
+- **安装包体积**：~10MB 级（macOS DMG）/ ~40MB 级（Windows NSIS，含内置 TDM-GCC，安装后展开约 290MB）
+- **运行内存**：主进程 ~35MB；完整实例（含 WebKit/WebView2 + Monaco）macOS ~260MB / Windows ~240MB（对比 Electron 同类应用通常 300MB+，仍更轻量）
 - **启动时间**：秒级（冷启动 <1s）
 - **无 Electron 包袱**：不打包 Chromium 内核，系统 webview 原生渲染
 

@@ -46,7 +46,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 // mock @tauri-apps/api/app（getVersion）
 vi.mock("@tauri-apps/api/app", () => ({
-  getVersion: vi.fn().mockResolvedValue("0.1.1"),
+  getVersion: vi.fn().mockResolvedValue("0.1.2"),
 }));
 
 // mock @tauri-apps/plugin-dialog（message）
@@ -1033,7 +1033,7 @@ describe("菜单 handler: toggle_devtools 和 about", () => {
     expect(getVersion).toHaveBeenCalled();
     expect(message).toHaveBeenCalled();
     const msgArg = vi.mocked(message).mock.calls[0][0] as string;
-    expect(msgArg).toContain("0.1.1");
+    expect(msgArg).toContain("0.1.2");
     expect(msgArg).toContain("YuanMing");
     expect(msgArg).toContain("MIT License");
     expect(msgArg).toContain("https://github.com/YuanMing/RunCode");

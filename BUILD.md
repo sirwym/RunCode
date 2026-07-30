@@ -72,10 +72,10 @@ export APPLE_TEAM_ID="XXXXXXXXXX"
 
 ```bash
 # Gatekeeper 验证
-spctl --assess --type install --verbose "RunCode_0.1.0_aarch64.dmg"
+spctl --assess --type install --verbose "RunCode_0.1.2_aarch64.dmg"
 
 # Stapler 验证
-xcrun stapler validate "RunCode_0.1.0_aarch64.dmg"
+xcrun stapler validate "RunCode_0.1.2_aarch64.dmg"
 ```
 
 通过后，用户可双击 DMG 直接安装，无需右键打开。
@@ -126,7 +126,7 @@ xcrun notarytool log <submission-id> --apple-id "$APPLE_ID" --password "$APPLE_P
 - 使用 `xcrun stapler staple` 附加公证票据：
   ```bash
   xcrun stapler staple "RunCode.app"
-  xcrun stapler staple "RunCode_0.1.0_aarch64.dmg"
+  xcrun stapler staple "RunCode_0.1.2_aarch64.dmg"
   ```
 
 ## Windows 构建
@@ -138,15 +138,24 @@ xcrun notarytool log <submission-id> --apple-id "$APPLE_ID" --password "$APPLE_P
 ```
 
 脚本会自动：
-1. 构建前端（`pnpm build`）
-2. 构建 Tauri NSIS 安装包（`pnpm tauri build`）
-3. 输出产物路径和体积
+1. 构建 Tauri NSIS 安装包（`pnpm tauri build`，会自动触发 `beforeBuildCommand: pnpm build`）
+2. 输出产物路径和体积
 
 TDM-GCC 已内置并提交到仓库（`src-tauri/resources/tdm-gcc/`），clone 后即用，无需额外准备。
 
-产出：`src-tauri/target/release/bundle/nsis/RunCode_0.1.0_x64-setup.exe`
+产出：`src-tauri/target/release/bundle/nsis/RunCode_0.1.2_x64-setup.exe`
 
-预估体积：~290 MB（RunCode ~10MB + TDM-GCC ~280MB）
+预估体积：~40 MB（NSIS LZMA 压缩后；TDM-GCC 原始资源约 280MB 压缩至 ~30MB + RunCode ~10MB）。安装后展开约 290 MB。
+
+### WebView2 Runtime 说明
+
+RunCode 依赖 WebView2 Runtime 渲染前端。安装包使用 `downloadBootstrapper` 模式，体积小但首次安装需联网下载 WebView2 Runtime（约 2MB）。
+
+- **Windows 11 / Windows 10 较新版本**：系统预装，无需额外下载
+- **全新机器 / 无 WebView2 的环境**：安装器会自动联网下载并安装
+- **离线机房（无外网）**：需提前预装 WebView2 Runtime，下载地址 https://developer.microsoft.com/microsoft-edge/webview2/
+  - 推荐机房管理员批量部署 `MicrosoftEdgeWebView2RuntimeInstallerX64.exe` 后再安装 RunCode
+  - 如需完全离线安装包，可将 `src-tauri/tauri.conf.json` 中的 `webviewInstallMode.type` 改为 `embedBootstrapper`（会增加约 150MB 体积）或 `offlineInstaller`
 
 ### TDM-GCC 维护
 
@@ -171,11 +180,11 @@ TDM-GCC 已内置并提交到仓库（`src-tauri/resources/tdm-gcc/`），clone 
 3. 用 `signtool.exe` 签名安装包：
    ```powershell
    signtool.exe sign /a /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
-     "src-tauri/target/release/bundle/nsis/RunCode_0.1.0_x64-setup.exe"
+     "src-tauri/target/release/bundle/nsis/RunCode_0.1.2_x64-setup.exe"
    ```
 4. 验证签名：
    ```powershell
-   signtool.exe verify /pa /v "RunCode_0.1.0_x64-setup.exe"
+   signtool.exe verify /pa /v "RunCode_0.1.2_x64-setup.exe"
    ```
 
 > 注：2023 年 6 月起，新的 OV 证书需要 Hardware Root of Trust（USB token），EV 证书可直接 USB token。教学场景建议直接跳过签名。
