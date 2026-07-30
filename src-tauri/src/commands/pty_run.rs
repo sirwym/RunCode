@@ -1,16 +1,23 @@
 use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tempfile::TempDir;
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::commands::compile_run::{compile_only, load_config, CompileScenario};
 use crate::error::AppError;
 use crate::pty::{PtyManager, PtySession};
 use crate::run_manager::{RunKind, RunManager};
+
+/// PTY 输出累计上限（50MB）。超过此上限视为异常输出（如死循环 printf），
+/// 自动 kill 子进程并 emit pty_exit(killed_by="output_limit")，
+/// 防止前端 xterm 缓冲无限增长导致 UI 卡死。
+const MAX_PTY_OUTPUT_BYTES: u64 = 50 * 1024 * 1024;
 
 /// PTY 输出事件（推送到前端）
 #[derive(Serialize, Clone)]
@@ -78,42 +85,77 @@ fn drain_reader_with_timeout(handle: &std::thread::JoinHandle<()>, timeout: Dura
 /// 2. 编译代码（编译阶段可取消）
 /// 3. 编译失败 → 返回 CompileFailed（不 emit 事件，避免时序竞态）
 /// 4. 编译成功 → 创建 PTY，spawn 子进程
-/// 5. 读取线程：循环读 PTY master → emit pty_output
+/// 5. 读取线程：循环读 PTY master → emit pty_output，累计 50MB 上限超限触发 kill
 /// 6. 等待线程：child.wait() → emit pty_exit + 清理 RunManager/PtyManager
+///
+/// RAII guard 保证任何 ? 提前返回（包括 load_config 失败）都自动 complete 会话。
 #[tauri::command]
 pub async fn start_pty_run(
     code: String,
+    run_id: String,
     app: AppHandle,
     run_manager: State<'_, RunManager>,
     pty_manager: State<'_, PtyManager>,
 ) -> Result<StartPtyResult, AppError> {
-    // 1. 注册 RunManager
-    let (run_id, cancel_rx) = run_manager
-        .register(RunKind::Interactive)
+    // 1. 注册 RunManager（使用前端传入的 run_id，与 compile_run/test_runner 对齐）
+    let cancel_token = run_manager
+        .register_with_id(run_id.clone(), RunKind::Interactive)
         .map_err(|e| AppError::Other { detail: e })?;
 
-    // 2. 执行内部逻辑。任何 Err 都在外层调 complete，避免 RunManager 永久忙碌。
-    //    Success 分支的 complete 由等待线程负责；CompileFailed 分支的 complete
-    //    由 inner 内部负责（保留原有逻辑）。
-    let result = start_pty_run_inner(code, run_id.clone(), cancel_rx, &app, &pty_manager).await;
-    if result.is_err() {
-        run_manager.complete(&run_id);
+    // 2. RAII guard：任何 ? 提前返回都保证 complete 执行
+    //    Success 分支由等待线程负责 complete，guard.active=false 避免重复；
+    //    CompileFailed 分支由 inner 内部 complete，guard.active=false；
+    //    Err 路径由 guard.Drop 兜底 complete。
+    struct RunGuard<'a> {
+        manager: &'a RunManager,
+        run_id: String,
+        active: bool,
     }
+    impl<'a> Drop for RunGuard<'a> {
+        fn drop(&mut self) {
+            if self.active {
+                self.manager.complete(&self.run_id);
+            }
+        }
+    }
+    let mut guard = RunGuard {
+        manager: &run_manager,
+        run_id: run_id.clone(),
+        active: true,
+    };
+
+    let result = start_pty_run_inner(code, run_id.clone(), cancel_token, &app, &pty_manager).await;
+    // Success：等待线程负责 complete，禁用 guard
+    // CompileFailed：inner 已 complete，禁用 guard
+    // Err：guard.Drop 会 complete
+    if result.is_ok() {
+        guard.active = false;
+    }
+    drop(guard);
     result
 }
 
 async fn start_pty_run_inner(
     code: String,
     run_id: String,
-    cancel_rx: oneshot::Receiver<()>,
+    cancel_token: CancellationToken,
     app: &AppHandle,
     pty_manager: &State<'_, PtyManager>,
 ) -> Result<StartPtyResult, AppError> {
-    // 2. 编译
+    // 2. 编译（clone token 保留原 token 给读取线程的 50MB 上限触发）
     let (_settings, config, limits) = load_config(app)?;
     let work_dir = TempDir::new()?;
 
-    let (exe_path, compile_stdout, compile_stderr) = match compile_only(&code, &config, CompileScenario::Run, work_dir.path(), limits, Some(cancel_rx)).await? {
+    let (exe_path, compile_stdout, compile_stderr) = match compile_only(
+        &code,
+        &config,
+        CompileScenario::Run,
+        work_dir.path(),
+        limits,
+        Some(cancel_token.clone()),
+    )
+    .await?
+    {
         crate::commands::compile_run::CompileResult::Success { exe_path, stdout, stderr } => (exe_path, stdout, stderr),
         crate::commands::compile_run::CompileResult::Failed {
             stderr, ..
@@ -166,16 +208,29 @@ async fn start_pty_run_inner(
     let session = PtySession::new(pair.master, writer, killer, pid, work_dir);
     pty_manager.insert(&run_id, session);
 
-    // 7. 读取线程：blocking read → emit pty_output
+    // 7. 读取线程：blocking read → emit pty_output，累计 50MB 上限超限触发 kill
+    // 跨线程共享"输出超限"标志：读取线程超限时 set，等待线程检测后改 emit killed_by
+    let output_limit_triggered = Arc::new(AtomicBool::new(false));
     let app_reader = app.clone();
     let run_id_reader = run_id.clone();
+    let output_limit_flag_reader = output_limit_triggered.clone();
     let reader_handle = std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0u8; 4096];
+        let mut total_bytes: u64 = 0;
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    total_bytes += n as u64;
+                    if total_bytes > MAX_PTY_OUTPUT_BYTES {
+                        // 超限：标记并 kill 子进程，等待线程会 emit pty_exit(killed_by="output_limit")
+                        output_limit_flag_reader.store(true, Ordering::Relaxed);
+                        if let Some(pm) = app_reader.try_state::<PtyManager>() {
+                            pm.kill(&run_id_reader);
+                        }
+                        break;
+                    }
                     let data = String::from_utf8_lossy(&buf[..n]).into_owned();
                     let _ = app_reader.emit(
                         "pty_output",
@@ -198,6 +253,7 @@ async fn start_pty_run_inner(
     // 会快速结束，轮询能立即检测到并 join，行为与原逻辑一致。
     let app_waiter = app.clone();
     let run_id_waiter = run_id.clone();
+    let output_limit_flag_waiter = output_limit_triggered.clone();
     std::thread::spawn(move || {
         let mut child = child;
 
@@ -309,12 +365,19 @@ async fn start_pty_run_inner(
             let _ = reader_handle.join();
         }
 
+        // 检测是否因输出超限被 kill（读取线程设置的标志）
+        let killed_by = if output_limit_flag_waiter.load(Ordering::Relaxed) {
+            Some("output_limit")
+        } else {
+            None
+        };
+
         let _ = app_waiter.emit(
             "pty_exit",
             PtyExitEvent {
                 run_id: run_id_waiter.clone(),
                 exit_code,
-                killed_by: None,
+                killed_by,
                 max_rss_kb,
             },
         );

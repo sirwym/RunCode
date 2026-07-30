@@ -14,6 +14,7 @@ import Terminal from "./components/Terminal";
 import StatusBar from "./components/StatusBar";
 import SettingsPanel from "./components/SettingsPanel";
 import RecentFilesDialog from "./components/RecentFilesDialog";
+import CheatsheetDialog from "./components/CheatsheetDialog";
 import TitleBar from "./components/TitleBar";
 import { useRunManager } from "./hooks/useRunManager";
 import { useTestOptions } from "./hooks/useTestOptions";
@@ -127,6 +128,7 @@ function App() {
   const [tab, setTab] = useState<PanelTab>("terminal");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
+  const [cheatsheetOpen, setCheatsheetOpen] = useState(false);
   // 输出面板折叠状态（由 collapse()/expand() 触发，由 onCollapse/onExpand 同步）
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   // 光标位置（用于 StatusBar 显示 Ln/Col）
@@ -412,7 +414,7 @@ function App() {
         void message(msg, { title: t("menu.about"), kind: "info" });
       });
     },
-    help: () => { /* no-op */ },
+    help: () => setCheatsheetOpen(true),
   };
 
   const menuHandlersRef = useRef(menuHandlers);
@@ -682,6 +684,13 @@ function App() {
         return;
       }
 
+      // 速查表
+      if (match(true, true, false, "h")) {
+        e.preventDefault(); e.stopPropagation();
+        setCheatsheetOpen(true);
+        return;
+      }
+
       // 视图菜单：字号缩放
       if (match(true, false, false, "=")) {
         e.preventDefault(); e.stopPropagation();
@@ -942,6 +951,7 @@ function App() {
         onClose={() => setRecentOpen(false)}
         onOpenPath={handleOpenRecentPath}
       />
+      <CheatsheetDialog open={cheatsheetOpen} onClose={() => setCheatsheetOpen(false)} />
     </div>
   );
 }

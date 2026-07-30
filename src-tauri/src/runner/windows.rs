@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::AppError;
 use crate::runner::executor::{KillReason, RunOutput};
@@ -22,15 +22,15 @@ use crate::runner::output::{read_until_limit, MAX_OUTPUT_BYTES};
 /// - 进程组 kill 用 `TerminateJobObject`（一次杀所有）
 /// - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 确保 JobObject 句柄关闭时杀子进程
 ///
-/// `cancel_rx` 来自 RunManager：drop Sender 端时 Receiver 返回 Err → 触发取消分支。
-/// 传 `None` 表示不可取消（单元测试用）。
+/// `cancel_token` 来自 RunManager：token.cancel() 后所有 clone 副本的 cancelled() future
+/// 同时触发，从而触发取消分支。传 `None` 表示不可取消（单元测试用）。
 pub async fn run_with_limits(
     cmd: Vec<String>,
     cwd: &Path,
     stdin: Option<String>,
     timeout: Duration,
     limits: ResourceLimits,
-    cancel_rx: Option<oneshot::Receiver<()>>,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<RunOutput, AppError> {
     if cmd.is_empty() {
         return Err(AppError::Other {
@@ -116,7 +116,7 @@ pub async fn run_with_limits(
 
     // 三路竞速：子进程结束 / 墙钟超时 / 外部取消
     let mut killed_by: Option<KillReason> = None;
-    let exit_status_result = if let Some(mut cancel_rx) = cancel_rx {
+    let exit_status_result = if let Some(cancel_token) = cancel_token {
         tokio::select! {
             status = child.wait() => {
                 Some(status)
@@ -128,7 +128,7 @@ pub async fn run_with_limits(
                 killed_by = Some(KillReason::Timeout);
                 None
             }
-            _ = &mut cancel_rx => {
+            _ = cancel_token.cancelled() => {
                 terminate_job(h_job.0);
                 let _ = child.start_kill();
                 let _ = child.wait().await;
@@ -370,7 +370,8 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_kills_process() {
-        let (tx, rx) = oneshot::channel::<()>();
+        let cancel_token = CancellationToken::new();
+        let token_clone = cancel_token.clone();
         let handle = tokio::spawn(async move {
             run_with_limits(
                 cmd_cmd("ping -n 30 127.0.0.1 > nul 2>nul"),
@@ -378,14 +379,14 @@ mod tests {
                 None,
                 Duration::from_secs(30),
                 limits(),
-                Some(rx),
+                Some(token_clone),
             )
             .await
         });
 
         // 200ms 后取消
         tokio::time::sleep(Duration::from_millis(200)).await;
-        drop(tx);
+        cancel_token.cancel();
 
         let out = handle.await.unwrap().unwrap();
         assert!(

@@ -32,7 +32,7 @@
 基于 Tauri 2 + Rust，相比 Electron 方案显著轻量：
 
 - **安装包体积**：~10MB 级（macOS DMG）/ ~15MB 级（Windows NSIS，含内置 TDM-GCC）
-- **运行内存**：~100MB 级（对比 Electron 同类应用通常 300MB+）
+- **运行内存**：主进程 ~35MB；完整实例（含 WebKit/WebView2 + Monaco）macOS ~260MB（对比 Electron 同类应用通常 300MB+，仍更轻量）
 - **启动时间**：秒级（冷启动 <1s）
 - **无 Electron 包袱**：不打包 Chromium 内核，系统 webview 原生渲染
 

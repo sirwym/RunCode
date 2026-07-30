@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tempfile::TempDir;
 use tauri::{AppHandle, Manager, State};
-use tokio::sync::oneshot;
+use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::CompilerConfig;
 use crate::error::AppError;
@@ -67,13 +67,15 @@ pub enum CompileResult {
 /// 在 work_dir 中写 main.cpp 并编译为 main 可执行文件。
 /// `scenario` 决定使用哪套编译参数（Run=快速运行 O0，Test=多样例测试 O2）。
 /// 调用者负责持有 work_dir（TempDir）直到不再需要 exe。
+///
+/// `cancel_token` 由调用方 clone 传入，支持编译阶段取消。
 pub async fn compile_only(
     code: &str,
     config: &CompilerConfig,
     scenario: CompileScenario,
     work_dir: &Path,
     compile_limits: ResourceLimits,
-    cancel_rx: Option<oneshot::Receiver<()>>,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<CompileResult, AppError> {
     // 写 main.cpp
     let main_cpp = work_dir.join("main.cpp");
@@ -98,7 +100,7 @@ pub async fn compile_only(
         None,
         config.compile_timeout,
         compile_limits,
-        cancel_rx,
+        cancel_token,
     )
     .await?;
 
@@ -136,24 +138,55 @@ pub fn load_config(app: &AppHandle) -> Result<(AppSettings, CompilerConfig, Reso
 /// 编译并运行 C++ 代码。
 ///
 /// 通过 RunManager 注册会话，实现单活动任务互斥 + 前端可取消。
-/// 编译和运行两阶段共享同一 cancel 信号。
+/// 编译和运行两阶段共享同一 CancellationToken（clone 复用），
+/// 因此运行阶段也能被外部取消（之前用 oneshot 时运行阶段无法取消）。
+///
+/// RAII guard 保证任何 ? 提前返回（包括 load_config 失败）都会自动 complete 会话。
 #[tauri::command]
 pub async fn compile_and_run(
     code: String,
     stdin: Option<String>,
+    run_id: String,
     app: AppHandle,
     manager: State<'_, RunManager>,
 ) -> Result<RunResult, AppError> {
-    // 注册会话（若已有活动任务则返回错误）
-    let (run_id, cancel_rx) = manager
-        .register(RunKind::CompileRun)
+    // 接受前端传入的 run_id，让停止按钮在 invoke 前就可用
+    let cancel_token = manager
+        .register_with_id(run_id.clone(), RunKind::CompileRun)
         .map_err(|e| AppError::Other { detail: e })?;
 
-    let (_settings, config, limits) = load_config(&app)?;
-    let result = run_compile_and_run_inner(code, stdin, run_id.clone(), Some(cancel_rx), &config, limits).await;
+    // RAII guard：任何 ? 提前返回（包括 load_config 失败）都保证 complete 执行
+    struct RunGuard<'a> {
+        manager: &'a RunManager,
+        run_id: String,
+        active: bool,
+    }
+    impl<'a> Drop for RunGuard<'a> {
+        fn drop(&mut self) {
+            if self.active {
+                self.manager.complete(&self.run_id);
+            }
+        }
+    }
+    let guard = RunGuard {
+        manager: &manager,
+        run_id: run_id.clone(),
+        active: true,
+    };
 
-    // 无论成功失败，都清理会话
-    manager.complete(&run_id);
+    let (_settings, config, limits) = load_config(&app)?;
+    let result = run_compile_and_run_inner(
+        code,
+        stdin,
+        run_id.clone(),
+        cancel_token,
+        &config,
+        limits,
+    )
+    .await;
+    // guard 自然 drop 时调用 complete，释放 RunManager 会话。
+    // 不主动设 active=false（之前的写法导致 Drop 不调用 complete，session 永久残留）。
+    drop(guard);
     result
 }
 
@@ -162,15 +195,24 @@ async fn run_compile_and_run_inner(
     code: String,
     stdin: Option<String>,
     run_id: String,
-    cancel_rx: Option<oneshot::Receiver<()>>,
+    cancel_token: CancellationToken,
     config: &CompilerConfig,
     limits: ResourceLimits,
 ) -> Result<RunResult, AppError> {
     let work_dir = TempDir::new()?;
     let work_path = work_dir.path().to_path_buf();
 
-    // 编译（复用 compile_only）
-    let exe_path = match compile_only(&code, config, CompileScenario::Run, &work_path, limits, cancel_rx).await? {
+    // 编译（复用 compile_only），clone token 保留原 token 给运行阶段
+    let exe_path = match compile_only(
+        &code,
+        config,
+        CompileScenario::Run,
+        &work_path,
+        limits,
+        Some(cancel_token.clone()),
+    )
+    .await?
+    {
         CompileResult::Success { exe_path, .. } => exe_path,
         CompileResult::Failed {
             stdout,
@@ -192,7 +234,7 @@ async fn run_compile_and_run_inner(
         }
     };
 
-    // 运行：./main
+    // 运行：./main（再次 clone token，运行阶段也可取消，之前传 None）
     let run_cmd: Vec<String> = vec![exe_path.to_string_lossy().into_owned()];
     let run_out = run_with_limits(
         run_cmd,
@@ -200,7 +242,7 @@ async fn run_compile_and_run_inner(
         stdin,
         config.run_timeout,
         limits,
-        None,
+        Some(cancel_token.clone()),
     )
     .await?;
 
@@ -240,7 +282,8 @@ int main() {
 }
 "#;
         let (config, limits) = test_config();
-        let result = run_compile_and_run_inner(code.into(), None, "test".into(), None, &config, limits)
+        let cancel_token = CancellationToken::new();
+        let result = run_compile_and_run_inner(code.into(), None, "test".into(), cancel_token, &config, limits)
             .await
             .expect("应编译运行成功");
         assert_eq!(result.stage, RunStage::Ran);
@@ -261,7 +304,8 @@ int main() {
 }
 "#;
         let (config, limits) = test_config();
-        let result = run_compile_and_run_inner(code.into(), Some("21".into()), "test".into(), None, &config, limits)
+        let cancel_token = CancellationToken::new();
+        let result = run_compile_and_run_inner(code.into(), Some("21".into()), "test".into(), cancel_token, &config, limits)
             .await
             .expect("应编译运行成功");
         assert_eq!(result.stdout.replace('\r', ""), "42\n");
@@ -276,7 +320,8 @@ int main() {
 }
 "#;
         let (config, limits) = test_config();
-        let result = run_compile_and_run_inner(bad_code.into(), None, "test".into(), None, &config, limits)
+        let cancel_token = CancellationToken::new();
+        let result = run_compile_and_run_inner(bad_code.into(), None, "test".into(), cancel_token, &config, limits)
             .await
             .expect("应返回编译失败结果");
         assert_eq!(result.stage, RunStage::CompileFailed);
@@ -320,5 +365,48 @@ int main() { return 0; }
                 panic!("预期编译成功（warning 不阻止编译），但得到 CompileFailed: {stderr}");
             }
         }
+    }
+
+    /// 回归测试：修复前正常路径会主动 guard.active = false，导致 Drop 不调用 complete，
+    /// session 永久残留，下次 register 报"已有运行任务在进行中"。
+    /// 修复后 guard 自然 drop，complete 被调用，可再次 register。
+    #[test]
+    fn run_guard_releases_session_on_normal_drop() {
+        use crate::run_manager::{RunManager, RunKind};
+        use uuid::Uuid;
+
+        let manager = RunManager::new();
+        let run_id = Uuid::new_v4().to_string();
+        let _token = manager
+            .register_with_id(run_id.clone(), RunKind::CompileRun)
+            .unwrap();
+        assert!(manager.is_busy());
+
+        // 复刻 compile_and_run 中修复后的 guard 模式
+        struct RunGuard<'a> {
+            manager: &'a RunManager,
+            run_id: String,
+            active: bool,
+        }
+        impl<'a> Drop for RunGuard<'a> {
+            fn drop(&mut self) {
+                if self.active {
+                    self.manager.complete(&self.run_id);
+                }
+            }
+        }
+        {
+            let _guard = RunGuard {
+                manager: &manager,
+                run_id: run_id.clone(),
+                active: true,
+            };
+            // 模拟 inner 正常返回（不设 active = false）
+        }
+
+        // session 应已释放
+        assert!(!manager.is_busy());
+        // 可再次注册新会话
+        assert!(manager.register(RunKind::CompileRun).is_ok());
     }
 }

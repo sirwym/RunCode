@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import Editor from "@monaco-editor/react";
 import { useSettings } from "../hooks/useSettings";
 import { useI18n, type Locale } from "../hooks/useI18n";
 import type { AppSettings, CustomThemeConfig } from "../types";
@@ -14,7 +15,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -25,6 +25,8 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import CustomThemePreview, { CustomThemeSliders, CustomThemeColorPicker } from "./CustomThemePreview";
+import { mapMonacoTheme } from "./Editor";
+import { getEffectiveTheme, type SettingsTheme } from "../utils/theme";
 import {
   extractThemeColors,
   loadImageToImageData,
@@ -88,6 +90,7 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   { category: "view", action: "menu.fontDec", macKeys: "Cmd+-", windowsKeys: "Ctrl+-" },
   { category: "view", action: "menu.fontReset", macKeys: "Cmd+0", windowsKeys: "Ctrl+0" },
   { category: "view", action: "menu.togglePanel", macKeys: "Cmd+\\", windowsKeys: "Ctrl+\\" },
+  { category: "view", action: "menu.helpContent", macKeys: "Cmd+Shift+H", windowsKeys: "Ctrl+Shift+H" },
   // 应用（DevTools：macOS Cmd+Alt+I，Windows Ctrl+Shift+I）
   { category: "app", action: "menu.settings", macKeys: "Cmd+,", windowsKeys: "Ctrl+," },
   { category: "app", action: "menu.toggleDevtools", macKeys: "Cmd+Alt+I", windowsKeys: "Ctrl+Shift+I" },
@@ -117,6 +120,18 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const saving = useSettings((s) => s.saving);
   const setThemePreview = useSettings((s) => s.setThemePreview);
   const clearThemePreview = useSettings((s) => s.clearThemePreview);
+  const themePreview = useSettings((s) => s.themePreview);
+
+  // 计算 Monaco 主题名（与主 Editor 一致），用于代码模板编辑器
+  const effectiveTheme: "dark" | "light" | "custom" = themePreview
+    ? "custom"
+    : getEffectiveTheme(settings?.general.theme as SettingsTheme | undefined);
+  const effectiveCustomTheme =
+    themePreview?.customTheme ?? settings?.general.custom_theme ?? null;
+  const monacoTheme = mapMonacoTheme(
+    effectiveTheme,
+    effectiveCustomTheme?.colors,
+  );
 
   const [draft, setDraft] = useState<AppSettings | null>(null);
   const [section, setSection] = useState<Section>("general");
@@ -795,7 +810,6 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       type="number"
                       min={8}
                       max={32}
-                      className="w-32"
                       value={draft.editor.font_size}
                       onChange={(e) =>
                         updateEditor("font_size", Number(e.target.value))
@@ -811,7 +825,6 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       type="number"
                       min={8}
                       max={32}
-                      className="w-32"
                       value={draft.editor.terminal_font_size}
                       onChange={(e) =>
                         updateEditor(
@@ -855,7 +868,6 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       type="number"
                       min={2}
                       max={8}
-                      className="w-32"
                       value={draft.editor.indent_size}
                       onChange={(e) =>
                         updateEditor("indent_size", Number(e.target.value))
@@ -1093,7 +1105,6 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       type="number"
                       min={1}
                       max={120}
-                      className="w-32"
                       value={draft.runtime.compile_timeout_secs}
                       onChange={(e) =>
                         updateRuntime(
@@ -1112,7 +1123,6 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       type="number"
                       min={1}
                       max={60}
-                      className="w-32"
                       value={draft.runtime.run_timeout_secs}
                       onChange={(e) =>
                         updateRuntime(
@@ -1131,7 +1141,6 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       type="number"
                       min={1}
                       max={60}
-                      className="w-32"
                       value={draft.runtime.cpu_secs}
                       onChange={(e) =>
                         updateRuntime("cpu_secs", Number(e.target.value))
@@ -1172,7 +1181,6 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       type="number"
                       min={1}
                       max={500}
-                      className="w-32"
                       value={draft.test.fsize_mb}
                       onChange={(e) =>
                         updateTest("fsize_mb", Number(e.target.value))
@@ -1189,7 +1197,6 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       min={100}
                       max={10000}
                       step={100}
-                      className="w-32"
                       value={draft.test.test_time_limit_ms}
                       onChange={(e) =>
                         updateTest(
@@ -1204,15 +1211,30 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   <h4 className="settings-section-title pt-2">
                     {t("settings.codeTemplate")}
                   </h4>
-                  <Textarea
-                    className="font-mono text-xs"
-                    rows={8}
-                    value={draft.compiler.template}
-                    onChange={(e) =>
-                      updateCompiler("template", e.target.value)
-                    }
-                    spellCheck={false}
-                  />
+                  <div className="settings-template-editor">
+                    <Editor
+                      height="200px"
+                      theme={monacoTheme}
+                      value={draft.compiler.template}
+                      onChange={(v) => updateCompiler("template", v ?? "")}
+                      language="cpp"
+                      options={{
+                        fontSize: 12,
+                        fontFamily:
+                          '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace',
+                        minimap: { enabled: false },
+                        scrollBeyondLastLine: false,
+                        lineNumbers: "on",
+                        tabSize: 4,
+                        automaticLayout: true,
+                        wordWrap: "on",
+                        quickSuggestions: false,
+                        suggestOnTriggerCharacters: false,
+                        autoClosingBrackets: "always",
+                        autoClosingQuotes: "always",
+                      }}
+                    />
+                  </div>
                 </TabsContent>
 
                 {/* ========== 快捷键只读展示 Tab ========== */}

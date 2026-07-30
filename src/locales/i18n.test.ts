@@ -140,4 +140,22 @@ describe("i18n 完整性", () => {
       },
     );
   });
+
+  // 速查表扩充（GESP 1-8 级覆盖）新增的类别 key
+  describe("cheatsheet 类别 key", () => {
+    const requiredCheatsheetKeys = [
+      "cheatsheet.catAll",
+      "cheatsheet.catSyntax",
+      "cheatsheet.catIO",
+      "cheatsheet.catString",
+      "cheatsheet.catContainer",
+      "cheatsheet.catAlgorithm",
+      "cheatsheet.catTemplate",
+    ];
+
+    it.each(requiredCheatsheetKeys)("zh 与 en 都包含 %s", (k) => {
+      expect(getByPath(zh, k), `zh 缺少 ${k}`).toBeTypeOf("string");
+      expect(getByPath(en, k), `en 缺少 ${k}`).toBeTypeOf("string");
+    });
+  });
 });

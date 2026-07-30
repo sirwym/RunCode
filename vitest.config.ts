@@ -9,6 +9,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // monaco-editor 包入口加载所有语言/contrib，jsdom 下无法解析
+      // 测试中用 mock 提供最小 colorize 实现
+      "monaco-editor": path.resolve(__dirname, "./src/test/monaco-editor-mock.ts"),
     },
   },
   test: {

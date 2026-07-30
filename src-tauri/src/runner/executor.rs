@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::AppError;
 use crate::runner::limits::ResourceLimits;
@@ -59,7 +59,9 @@ pub struct RunOutput {
 /// - 内存限制：两平台均不实现（macOS RLIMIT_DATA 只接受 INFINITY）
 /// - CPU 限制：Unix 用 RLIMIT_CPU，Windows 用 JobObject LIMIT_JOB_TIME
 ///
-/// `cancel_rx` 来自 RunManager：drop Sender 端时 Receiver 返回 Err → 触发取消分支。
+/// `cancel_token` 来自 RunManager：调用 token.cancel() 后所有 clone 副本的 cancelled() future
+/// 同时触发，从而触发取消分支。相比 oneshot 一次性 Receiver，CancellationToken 可被
+/// 多个执行阶段 clone 复用（编译→运行、批量测试每例）。
 /// 传 `None` 表示不可取消（单元测试用）。
 pub async fn run_with_limits(
     cmd: Vec<String>,
@@ -67,7 +69,7 @@ pub async fn run_with_limits(
     stdin: Option<String>,
     timeout: Duration,
     limits: ResourceLimits,
-    cancel_rx: Option<oneshot::Receiver<()>>,
+    cancel_token: Option<CancellationToken>,
 ) -> Result<RunOutput, AppError> {
-    run_with_limits_impl(cmd, cwd, stdin, timeout, limits, cancel_rx).await
+    run_with_limits_impl(cmd, cwd, stdin, timeout, limits, cancel_token).await
 }

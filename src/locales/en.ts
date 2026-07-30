@@ -32,9 +32,10 @@ export const en = {
     cursorPos: "Ln {line}, Col {col}",
   },
   killed: {
-    timeout: "Timed out (killed)",
+    timeout: "Run timeout (killed)",
     signal: "Killed by signal",
     cancelled: "Cancelled",
+    outputLimit: "Output limit (killed)",
   },
   tests: {
     title: "Multi-Case Tests",
@@ -90,6 +91,12 @@ export const en = {
     tests: "Multi-Case Tests",
     terminal: "Terminal",
     close: "Hide Panel",
+    terminalMenu: {
+      copy: "Copy",
+      paste: "Paste",
+      selectAll: "Select All",
+      clear: "Clear",
+    },
   },
   errors: {
     compiler_not_found: "Compiler not found: {detail}",
@@ -250,7 +257,7 @@ export const en = {
     fontReset: "Reset Font Size",
     togglePanel: "Toggle Output Panel",
     help: "Help",
-    helpContent: "RunCode Help",
+    helpContent: "C++ Cheatsheet",
     toggleDevtools: "Toggle Developer Tools",
   },
   about: {
@@ -279,5 +286,18 @@ export const en = {
     cancel: "Cancel",
     closeAllConfirmMsg: "{count} file(s) unsaved. Save all?",
     untitled: "untitled",
+  },
+  cheatsheet: {
+    title: "C++ Cheatsheet",
+    searchPlaceholder: "Search syntax, STL, algorithms…",
+    copy: "Copy",
+    noResults: "No matching entries",
+    catAll: "All",
+    catSyntax: "Syntax",
+    catIO: "I/O",
+    catString: "String",
+    catContainer: "Container",
+    catAlgorithm: "Algorithm / STL",
+    catTemplate: "Template",
   },
 } as const;

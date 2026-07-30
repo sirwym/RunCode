@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import type { ITheme as XTermTheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -7,6 +7,15 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 import type { CustomThemeColors } from "../types";
 import { hexToRgb } from "../utils/colorExtract";
+import { useI18n } from "../hooks/useI18n";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { Copy, ClipboardPaste, BoxSelect, Eraser } from "lucide-react";
 
 // xterm 深色主题：背景与 global.css 中 --bg-terminal 深色值一致（#0a0a0a），
 // 避免与周围 panel-bg（#141414）产生色差；光标/选区/ANSI blue 与 RunCode 主题协调
@@ -155,6 +164,50 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
   // 保存最新的 compileWarning，runId effect 在 term.reset() 后写入（避免被 reset 清除）
   const compileWarningRef = useRef(compileWarning);
   compileWarningRef.current = compileWarning;
+
+  // 右键菜单状态
+  const t = useI18n((s) => s.t);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const [hasSelection, setHasSelection] = useState(false);
+
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const term = termRef.current;
+    setHasSelection(!!term?.hasSelection());
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMenuPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setMenuOpen(true);
+  };
+
+  const handleCopy = () => {
+    const term = termRef.current;
+    if (!term) return;
+    const sel = term.getSelection();
+    if (sel) void navigator.clipboard.writeText(sel).catch(() => {});
+  };
+
+  const handlePaste = async () => {
+    const term = termRef.current;
+    if (!term) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) term.paste(text);
+    } catch {
+      // 剪贴板读取失败（权限受限等），静默忽略
+    }
+  };
+
+  const handleSelectAll = () => {
+    termRef.current?.selectAll();
+  };
+
+  const handleClear = () => {
+    const term = termRef.current;
+    if (!term) return;
+    term.clear();
+    term.scrollToBottom();
+  };
 
   // 初始化终端（只执行一次）
   useEffect(() => {
@@ -348,7 +401,47 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     };
   }, [runId]);
 
-  return <div className="terminal-container" ref={containerRef} />;
+  return (
+    <div
+      className="terminal-container relative"
+      ref={containerRef}
+      onContextMenu={handleContextMenu}
+    >
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={false}>
+        <DropdownMenuTrigger asChild>
+          <span
+            style={{
+              position: "absolute",
+              left: menuPos.x,
+              top: menuPos.y,
+              width: 0,
+              height: 0,
+              pointerEvents: "none",
+            }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem disabled={!hasSelection} onClick={handleCopy}>
+            <Copy className="h-3 w-3" />
+            {t("panel.terminalMenu.copy")}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={handlePaste}>
+            <ClipboardPaste className="h-3 w-3" />
+            {t("panel.terminalMenu.paste")}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={handleSelectAll}>
+            <BoxSelect className="h-3 w-3" />
+            {t("panel.terminalMenu.selectAll")}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleClear}>
+            <Eraser className="h-3 w-3" />
+            {t("panel.terminalMenu.clear")}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
 }
 
 export default Terminal;

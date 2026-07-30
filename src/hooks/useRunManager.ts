@@ -131,10 +131,21 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   compileRun: async (code, stdin) => {
     if (get().activeRunId) return;
     const initiatorTabId = get().activeTabId;
-    set({ status: "running", error: null, kind: "compile_run", testResult: null, compileWarning: null });
+    // 前端生成 runId，invoke 前立即设置 activeRunId 让停止按钮可用
+    const runId = crypto.randomUUID();
+    set({
+      activeRunId: runId,
+      status: "running",
+      error: null,
+      kind: "compile_run",
+      testResult: null,
+      compileWarning: null,
+    });
     try {
-      const result = await invoke<RunResult>("compile_and_run", { code, stdin });
+      const result = await invoke<RunResult>("compile_and_run", { code, stdin, runId });
       set((s) => {
+        // 守卫：已被 stop 或被新任务替换，丢弃结果（不覆盖 idle）
+        if (s.activeRunId !== runId) return s;
         const isStillActive = s.activeTabId === initiatorTabId;
         const resultsByTab = initiatorTabId
           ? {
@@ -159,6 +170,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       });
     } catch (e) {
       set((s) => {
+        // 守卫：已被 stop 或被新任务替换，丢弃错误
+        if (s.activeRunId !== runId) return s;
         const isStillActive = s.activeTabId === initiatorTabId;
         const resultsByTab = initiatorTabId
           ? {
@@ -187,7 +200,10 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   runTests: async (code, suiteId, strict) => {
     if (get().activeRunId) return;
     const initiatorTabId = get().activeTabId;
+    // 前端生成 runId，invoke 前立即设置 activeRunId 让停止按钮可用
+    const runId = crypto.randomUUID();
     set({
+      activeRunId: runId,
       status: "running",
       error: null,
       kind: "test_run",
@@ -206,9 +222,19 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       // 监听失败忽略
     }
 
+    // 守卫：listen await 期间用户点 stop，stop 看到 activeRunId 还在但后端 session 还没注册，
+    // stop_run 返回 false 但前端仍把 activeRunId 设为 null。
+    // 这里检查后跳过 invoke，避免后端开始跑而前端已经 idle。
+    if (get().activeRunId !== runId) {
+      if (unlisten) unlisten();
+      return;
+    }
+
     try {
-      const result = await invoke<TestRunResult>("run_tests", { code, suiteId, strict });
+      const result = await invoke<TestRunResult>("run_tests", { code, suiteId, strict, runId });
       set((s) => {
+        // 守卫：已被 stop 或被新任务替换，丢弃结果
+        if (s.activeRunId !== runId) return s;
         const isStillActive = s.activeTabId === initiatorTabId;
         const resultsByTab = initiatorTabId
           ? {
@@ -233,6 +259,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       });
     } catch (e) {
       set((s) => {
+        // 守卫：已被 stop 或被新任务替换，丢弃错误
+        if (s.activeRunId !== runId) return s;
         const isStillActive = s.activeTabId === initiatorTabId;
         const resultsByTab = initiatorTabId
           ? {
@@ -263,7 +291,10 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   startInteractive: async (code) => {
     if (get().activeRunId) return;
     const initiatorTabId = get().activeTabId;
+    // 前端预生成 runId，invoke 前设置 activeRunId，让编译期停止按钮可用
+    const runId = crypto.randomUUID();
     set({
+      activeRunId: runId,
       status: "running",
       error: null,
       kind: "interactive",
@@ -275,8 +306,16 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       compileWarning: null,
     });
     try {
-      const result = await invoke<StartPtyResult>("start_pty_run", { code });
+      const result = await invoke<StartPtyResult>("start_pty_run", { code, runId });
       if (result.status === "success") {
+        // 守卫：编译期间被 stop，丢弃结果（PTY 已建立需清理）
+        // stop_pty_run 已被 stopInteractive 调用，但 PTY 在 start_pty_run 返回后才创建，
+        // stopInteractive 的 kill 是 no-op。这里再调一次确保 PTY 清理。
+        // stop_pty_run 是幂等的，重复调用无害。
+        if (get().activeRunId !== runId) {
+          await invoke<boolean>("stop_pty_run", { runId }).catch(() => {});
+          return;
+        }
         // 编译成功但有 warning 时，存储 compile_stderr 供 Terminal 在 PTY 输出前显示。
         // 注意：compile_stderr 即使为空字符串也存储（Terminal 会判断是否为空决定是否显示），
         // 但为了精确控制显示，这里只在非空时存储。
@@ -303,6 +342,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
           };
         });
       } else {
+        // 守卫：编译期间被 stop，丢弃结果
+        if (get().activeRunId !== runId) return;
         // 编译失败：后端返回 CompileFailed，不创建 PTY 会话
         set((s) => {
           const isStillActive = s.activeTabId === initiatorTabId;
@@ -329,6 +370,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
         });
       }
     } catch (e) {
+      // 守卫：已被 stop，丢弃错误
+      if (get().activeRunId !== runId) return;
       set({
         activeRunId: null,
         status: "error",

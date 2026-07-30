@@ -211,7 +211,7 @@ function TitleBar({ menuHandlers, layout, autoHide }: TitleBarProps) {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="titlebar-menu-content">
             <DropdownMenuItem onClick={() => menuHandlers["help"]()}>
-              {t("menu.helpContent")}
+              {t("menu.helpContent")}<Shortcut>Ctrl+Shift+H</Shortcut>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => menuHandlers["toggle_devtools"]()}>

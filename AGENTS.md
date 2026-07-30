@@ -9,7 +9,7 @@ RunCode 是一个轻量级跨平台 C++ 教学编辑器（macOS + Windows），�
 **性能与轻量化目标**（硬约束）：
 
 - 安装包体积保持在 ~10MB 级（macOS）/ ~15MB 级（Windows 含 TDM-GCC），不得显著膨胀
-- 运行内存 ~100MB 级，不得引入常驻后台进程
+- 运行内存：主进程 ~35MB；完整实例（含 WebKit/WebView2 渲染 + Monaco）macOS ~260MB / Windows 类似。WebKit + Monaco 是主要内存来源，无法通过优化压到 100MB；不得引入常驻后台进程
 - 启动时间秒级，不得引入启动期 IO 密集操作
 - 不引入 Electron / Chromium 内核依赖
 - 修改时优先考虑对体积/内存/启动时间的影响
@@ -55,6 +55,7 @@ RunCode 是一个轻量级跨平台 C++ 教学编辑器（macOS + Windows），�
 
 - **不引入新依赖**，除非用户明确要求
 - 优先使用现有库（如 lucide-react 图标库、Radix UI primitives、Zustand 状态管理）
+- 例外：`tokio-util`（仅 `sync::CancellationToken` 模块，`default-features = false`）用于替代一次性 `oneshot::Receiver`，支持取消信号在多阶段执行（编译→运行、批量测试每例）中复用
 
 ### 3. 文件管理
 
@@ -93,6 +94,12 @@ cd src-tauri && cargo test   # 后端 Rust 测试
 - 前端测试用 Vitest + @testing-library/react（参考 [src/App.test.tsx](file:///Users/mymac/工作站/c++ide/src/App.test.tsx)、[src/components/SettingsPanel.test.tsx](file:///Users/mymac/工作站/c++ide/src/components/SettingsPanel.test.tsx)、[src/locales/i18n.test.ts](file:///Users/mymac/工作站/c++ide/src/locales/i18n.test.ts)）
 - 后端测试用 `#[cfg(test)] mod tests`（参考 [src-tauri/src/settings.rs](file:///Users/mymac/工作站/c++ide/src-tauri/src/settings.rs)、[src-tauri/src/commands/test_runner.rs](file:///Users/mymac/工作站/c++ide/src-tauri/src/commands/test_runner.rs)）
 - 纯函数优先（便于单元测试，参考 `judge_case_passed`）
+
+### 大测试集使用建议
+
+执行阶段会将每例 stdin、expected、标准化输出完整载入内存，每例结果最多 ~2MB。
+建议单套件用例数不超过 500 例，避免内存峰值过大。
+单文件 50MB、套件 200MB 上限仍生效，但极端大样例可能触发内存压力。
 
 ### 验证不等式
 

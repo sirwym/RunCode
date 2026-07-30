@@ -1696,3 +1696,168 @@ body::before {
   --error-soft: rgba(185, 28, 28, 0.10);
   --error-border: rgba(185, 28, 28, 0.40);
 }
+
+/* ============== C++ 速查表 Dialog ============== */
+/* 减小 Dialog 默认 padding（p-6 → p-4），内容更紧凑 */
+.cheatsheet-dialog {
+  padding: 16px;
+  gap: 12px;
+  max-height: 80vh;
+}
+
+/* 搜索框容器：左侧图标 + Input */
+.cheatsheet-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.cheatsheet-search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.cheatsheet-search-input {
+  padding-left: 32px;
+}
+
+/* 分类 chip 按钮（Lyra 全直角风格） */
+.cheatsheet-categories {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.cheatsheet-chip {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+.cheatsheet-chip:hover {
+  background: var(--panel-bg-alt);
+}
+.cheatsheet-chip.active {
+  border-color: var(--primary-border);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+/* 结果区：可滚动，最大高度与 Dialog 协同 */
+.cheatsheet-results {
+  max-height: 60vh;
+  border: 1px solid var(--border);
+}
+
+/* 分组小标题 */
+.cheatsheet-group {
+  margin-bottom: 4px;
+}
+.cheatsheet-group-title {
+  position: sticky;
+  top: 0;
+  background: var(--panel-bg);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid var(--border);
+  z-index: 1;
+}
+
+/* 单条条目 */
+.cheatsheet-entry {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.cheatsheet-entry:last-child {
+  border-bottom: none;
+}
+.cheatsheet-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.cheatsheet-entry-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+}
+.cheatsheet-entry-title {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.cheatsheet-copy {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.cheatsheet-copy:hover {
+  border-color: var(--border);
+  background: var(--panel-bg-alt);
+  color: var(--text);
+}
+
+.cheatsheet-entry-summary {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0 0 6px;
+  line-height: 1.5;
+}
+
+/* 代码片段块 */
+.cheatsheet-snippet {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0;
+}
+.cheatsheet-snippet-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg-terminal);
+  color: var(--text);
+  padding: 6px 10px;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.cheatsheet-snippet-comment {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-left: 10px;
+  line-height: 1.5;
+}
+
+/* 空状态 */
+.cheatsheet-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* ============== 设置面板：代码模板 Monaco 编辑器 ============== */
+.settings-template-editor {
+  border: 1px solid var(--border);
+  height: 200px;
+  overflow: hidden;
+}

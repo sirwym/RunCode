@@ -17,6 +17,14 @@ function formatMem(kb: number): string {
   return `${(kb / 1024).toFixed(1)} MB`;
 }
 
+// killed_by 字段 → i18n key 后缀（在 killed.* 命名空间下）
+// - RunResult.killed_by: "timeout" | "signal" | "cancelled"（已是合法 key）
+// - PtyExitInfo.killedBy: "output_limit" → "outputLimit"（驼峰转换），其他与 KillReason 同
+function killedByKey(killedBy: string): string {
+  if (killedBy === "output_limit") return "outputLimit";
+  return killedBy; // timeout / signal / cancelled
+}
+
 function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps) {
   const t = useI18n((s) => s.t);
   const status = useRunManager((s) => s.status);
@@ -89,6 +97,18 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
         <span className="status-item status-item-low-priority">
           <span className="status-label">{t("status.memory")}:</span>
           {formatMem(runResult.max_rss_kb)}
+        </span>
+      )}
+
+      {/* 被杀原因：超时/信号/取消/输出超限（PTY 路径独有） */}
+      {runResult?.killed_by && (
+        <span className="status-item status-item-low-priority">
+          {t(`killed.${killedByKey(runResult.killed_by)}`)}
+        </span>
+      )}
+      {!runResult && ptyExitInfo?.killedBy && (
+        <span className="status-item status-item-low-priority">
+          {t(`killed.${killedByKey(ptyExitInfo.killedBy)}`)}
         </span>
       )}
 

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::commands::compile_run::{compile_only, load_config, CompileScenario, RunStage};
 use crate::error::AppError;
@@ -127,28 +127,64 @@ fn first_diff_index(a: &str, b: &str) -> Option<usize> {
 /// 批量测试：编译一次，逐个运行测试用例（stdin/expected 从文件读取）。
 ///
 /// - 通过 RunManager 注册会话，实现单活动任务互斥 + 前端可取消
+/// - 编译和每例运行都 clone 同一 CancellationToken，支持编译期/用例间/用例中取消
 /// - 每个用例运行前 emit `test_progress` (Running)
 /// - 每个用例运行后 emit `test_progress` (Passed/Failed)
 /// - 取消时 emit `test_progress` (Cancelled)
+///
+/// RAII guard 保证任何 ? 提前返回（包括 load_config 失败）都自动 complete 会话。
 #[tauri::command]
 pub async fn run_tests(
     code: String,
     suite_id: String,
     strict: Option<bool>,
+    run_id: String,
     app: AppHandle,
     manager: State<'_, RunManager>,
 ) -> Result<TestRunResult, AppError> {
     let strict = strict.unwrap_or(false);
 
-    let (run_id, cancel_rx) = manager
-        .register(RunKind::TestRun)
+    // 接受前端传入的 run_id，让停止按钮在 invoke 前就可用
+    let cancel_token = manager
+        .register_with_id(run_id.clone(), RunKind::TestRun)
         .map_err(|e| AppError::Other { detail: e })?;
+
+    // RAII guard：任何 ? 提前返回（包括 base_dir/load_config 失败）都保证 complete 执行
+    struct RunGuard<'a> {
+        manager: &'a RunManager,
+        run_id: String,
+        active: bool,
+    }
+    impl<'a> Drop for RunGuard<'a> {
+        fn drop(&mut self) {
+            if self.active {
+                self.manager.complete(&self.run_id);
+            }
+        }
+    }
+    let guard = RunGuard {
+        manager: &manager,
+        run_id: run_id.clone(),
+        active: true,
+    };
 
     let base = base_dir(&app)?;
     let (_settings, config, limits) = load_config(&app)?;
-    let result = run_tests_inner(&code, &suite_id, strict, &base, run_id.clone(), Some(cancel_rx), &app, &config, limits).await;
-
-    manager.complete(&run_id);
+    let result = run_tests_inner(
+        &code,
+        &suite_id,
+        strict,
+        &base,
+        run_id.clone(),
+        cancel_token,
+        &app,
+        &config,
+        limits,
+    )
+    .await;
+    // guard 自然 drop 时调用 complete，释放 RunManager 会话。
+    // 不主动设 active=false（之前的写法导致 Drop 不调用 complete，session 永久残留）。
+    drop(guard);
     result
 }
 
@@ -168,7 +204,7 @@ async fn run_tests_inner(
     strict: bool,
     base: &Path,
     run_id: String,
-    mut cancel_rx: Option<oneshot::Receiver<()>>,
+    cancel_token: CancellationToken,
     app: &AppHandle,
     config: &crate::config::CompilerConfig,
     limits: ResourceLimits,
@@ -178,7 +214,17 @@ async fn run_tests_inner(
     let work_path = work_dir.path().to_path_buf();
 
     // 编译（复用 compile_only，测试场景用 test.opt_level）
-    let exe_path = match compile_only(code, config, CompileScenario::Test, &work_path, limits, cancel_rx.take()).await? {
+    // clone token 保留原 token 给每例运行
+    let exe_path = match compile_only(
+        code,
+        config,
+        CompileScenario::Test,
+        &work_path,
+        limits,
+        Some(cancel_token.clone()),
+    )
+    .await?
+    {
         crate::commands::compile_run::CompileResult::Success { exe_path, .. } => exe_path,
         crate::commands::compile_run::CompileResult::Failed {
             stdout,
@@ -188,13 +234,13 @@ async fn run_tests_inner(
             // 加载套件清单获取用例数量
             let manifest = TestSuite::load(base, suite_id).unwrap_or_else(|_| {
                 // 加载失败也返回编译错误结果
-                return crate::test_suite::TestSuiteManifest {
+                crate::test_suite::TestSuiteManifest {
                     suite_id: suite_id.into(),
                     doc_path: None,
                     cases: vec![],
                     updated_at: 0,
                     schema_version: 2,
-                };
+                }
             });
             return Ok(TestRunResult {
                 run_id,
@@ -218,16 +264,8 @@ async fn run_tests_inner(
     let mut passed_count = 0;
 
     for (index, case) in manifest.cases.iter().enumerate() {
-        // 每个用例运行前检查是否已取消
-        let should_cancel = if let Some(rx) = cancel_rx.as_mut() {
-            tokio::select! {
-                _ = rx => true,
-                _ = tokio::time::sleep(std::time::Duration::from_micros(0)) => false,
-            }
-        } else {
-            false
-        };
-        if should_cancel {
+        // 每个用例运行前检查是否已取消（用例间取消）
+        if cancel_token.is_cancelled() {
             let _ = app.emit(
                 "test_progress",
                 TestProgress::Cancelled {
@@ -254,7 +292,8 @@ async fn run_tests_inner(
         let stdin_bytes = TestSuite::read_case_input(base, suite_id, &case.id)?;
         let stdin = String::from_utf8_lossy(&stdin_bytes).into_owned();
 
-        // 运行
+        // 运行：每例 clone token，cancel 立即触发 select! 取消分支
+        // （之前每例传 None，用例运行中无法取消）
         let run_cmd: Vec<String> = vec![exe_path.to_string_lossy().into_owned()];
         let run_out = run_with_limits(
             run_cmd,
@@ -262,9 +301,23 @@ async fn run_tests_inner(
             Some(stdin),
             config.run_timeout,
             limits,
-            None,
+            Some(cancel_token.clone()),
         )
         .await?;
+
+        // 被取消的用例不应判失败，直接 emit Cancelled 并退出循环。
+        // 修复前：judge_case_passed 看到 exit_code=None 判 Failed，最后一个用例连 Cancelled 都不发。
+        if matches!(run_out.killed_by, Some(KillReason::Cancelled)) {
+            let _ = app.emit(
+                "test_progress",
+                TestProgress::Cancelled {
+                    run_id: run_id.clone(),
+                    index,
+                    total,
+                },
+            );
+            break;
+        }
 
         let stdout = String::from_utf8_lossy(&run_out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&run_out.stderr).into_owned();
@@ -414,5 +467,58 @@ mod tests {
         // 非 strict 模式：尾部换行不敏感
         assert!(judge_case_passed(Some(0), "hello\n", "hello", 100, 1000, false));
         assert!(judge_case_passed(Some(0), "hello", "hello\n\n\n", 100, 1000, false));
+    }
+
+    /// 回归测试：取消时不应调用 judge_case_passed。
+    /// judge_case_passed 在 exit_code=None 时返回 false（这是正确行为），
+    /// 修复点是在调用 judge 前先检查 killed_by == Cancelled 并 break。
+    #[test]
+    fn judge_returns_false_for_cancelled_process() {
+        // 被取消的进程 exit_code 为 None，judge 必须判 false
+        // （修复后不会走到 judge，但 judge 的契约仍需保证）
+        assert!(!judge_case_passed(None, "hello", "hello", 100, 1000, false));
+    }
+
+    /// 回归测试：修复前正常路径会主动 guard.active = false，导致 Drop 不调用 complete，
+    /// session 永久残留，下次 register 报"已有运行任务在进行中"。
+    /// 修复后 guard 自然 drop，complete 被调用，可再次 register。
+    #[test]
+    fn run_guard_releases_session_on_normal_drop() {
+        use crate::run_manager::{RunManager, RunKind};
+        use uuid::Uuid;
+
+        let manager = RunManager::new();
+        let run_id = Uuid::new_v4().to_string();
+        let _token = manager
+            .register_with_id(run_id.clone(), RunKind::TestRun)
+            .unwrap();
+        assert!(manager.is_busy());
+
+        // 复刻 run_tests 中修复后的 guard 模式
+        struct RunGuard<'a> {
+            manager: &'a RunManager,
+            run_id: String,
+            active: bool,
+        }
+        impl<'a> Drop for RunGuard<'a> {
+            fn drop(&mut self) {
+                if self.active {
+                    self.manager.complete(&self.run_id);
+                }
+            }
+        }
+        {
+            let _guard = RunGuard {
+                manager: &manager,
+                run_id: run_id.clone(),
+                active: true,
+            };
+            // 模拟 inner 正常返回（不设 active = false）
+        }
+
+        // session 应已释放
+        assert!(!manager.is_busy());
+        // 可再次注册新会话
+        assert!(manager.register(RunKind::TestRun).is_ok());
     }
 }

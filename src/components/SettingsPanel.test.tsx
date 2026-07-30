@@ -20,6 +20,18 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: (...args: unknown[]) => openDialogMock(...args),
 }));
 
+// mock @monaco-editor/react：jsdom 下无法加载真实 Monaco，用 textarea 替代
+// 仅用于代码模板编辑器渲染，不影响其他测试逻辑
+vi.mock("@monaco-editor/react", () => ({
+  default: ({ value, onChange }: { value: string; onChange?: (v: string) => void }) => (
+    <textarea
+      data-testid="mock-monaco-editor"
+      value={value}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
+  ),
+}));
+
 // mock colorExtract：绕过 Canvas API（jsdom 不支持 getContext）
 // 仅在导入图片流程中使用，不影响其他测试
 const fakeExtractedColors = {

@@ -761,13 +761,27 @@ fn migrate_v2_to_v3(v: serde_json::Value, base: &Path) -> AppSettings {
     s
 }
 
-/// 保存设置
+/// 保存设置（原子写入：同目录临时文件 + rename）
+///
+/// 流程：NamedTempFile::new_in(parent) → fs::write → persist(rename)。
+/// 写入过程中崩溃（panic / 断电）不会损坏现有 settings.json：
+/// - 临时文件在 Drop 时自动清理
+/// - persist 内部用 rename(2) 原子替换，要么完整生效要么不影响原文件
 pub fn save(base: &Path, settings: &AppSettings) -> Result<(), AppError> {
     let path = settings_path(base);
+    let parent = path.parent().ok_or_else(|| AppError::Other {
+        detail: "settings.json 路径无父目录".into(),
+    })?;
     let raw = serde_json::to_string_pretty(settings).map_err(|e| AppError::Other {
         detail: format!("序列化设置失败: {e}"),
     })?;
-    fs::write(&path, raw)?;
+
+    // 同目录临时文件 + persist(rename)，保证原子性
+    let tmp = tempfile::NamedTempFile::new_in(parent)?;
+    fs::write(tmp.path(), raw)?;
+    tmp.persist(&path).map_err(|e| AppError::Other {
+        detail: format!("settings.json 持久化失败: {e}"),
+    })?;
     Ok(())
 }
 

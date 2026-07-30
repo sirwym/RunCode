@@ -35,6 +35,7 @@ export const zh = {
     timeout: "运行超时（已终止）",
     signal: "被信号杀死",
     cancelled: "已取消",
+    outputLimit: "输出超限（已终止）",
   },
   tests: {
     title: "多样例测试",
@@ -90,6 +91,12 @@ export const zh = {
     tests: "多样例测试",
     terminal: "终端",
     close: "隐藏面板",
+    terminalMenu: {
+      copy: "复制",
+      paste: "粘贴",
+      selectAll: "全选",
+      clear: "清空",
+    },
   },
   errors: {
     compiler_not_found: "找不到编译器：{detail}",
@@ -250,7 +257,7 @@ export const zh = {
     fontReset: "重置字号",
     togglePanel: "隐藏/显示输出面板",
     help: "帮助",
-    helpContent: "RunCode 帮助",
+    helpContent: "C++ 速查表",
     toggleDevtools: "切换开发人员工具",
   },
   about: {
@@ -279,5 +286,18 @@ export const zh = {
     cancel: "取消",
     closeAllConfirmMsg: "有 {count} 个文件未保存，是否全部保存？",
     untitled: "未命名",
+  },
+  cheatsheet: {
+    title: "C++ 速查表",
+    searchPlaceholder: "搜索语法、STL、算法……",
+    copy: "复制",
+    noResults: "没有匹配的条目",
+    catAll: "全部",
+    catSyntax: "语法",
+    catIO: "输入输出",
+    catString: "字符串",
+    catContainer: "容器",
+    catAlgorithm: "算法 / STL",
+    catTemplate: "模板",
   },
 } as const;

@@ -255,3 +255,67 @@ describe("StatusBar 窄窗口优先级类", () => {
     expect(screen.queryByText("999 ms")).toBeNull();
   });
 });
+
+describe("StatusBar killed_by 显示", () => {
+  beforeEach(() => {
+    resetStores(makeSettings(), "done");
+  });
+
+  it("RunResult killed_by=timeout 显示超时终止", () => {
+    useRunManager.setState({
+      runResult: {
+        run_id: "r1",
+        success: false,
+        stdout: "",
+        stderr: "",
+        exit_code: null,
+        duration_ms: 100,
+        killed_by: "timeout",
+        truncated: false,
+        stage: "ran",
+        max_rss_kb: 1024,
+      } as never,
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    expect(screen.getByText("运行超时（已终止）")).toBeInTheDocument();
+  });
+
+  it("RunResult killed_by=signal 显示信号终止", () => {
+    useRunManager.setState({
+      runResult: {
+        run_id: "r1",
+        success: false,
+        stdout: "",
+        stderr: "",
+        exit_code: null,
+        duration_ms: 100,
+        killed_by: "signal",
+        truncated: false,
+        stage: "ran",
+        max_rss_kb: 0,
+      } as never,
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    expect(screen.getByText("被信号杀死")).toBeInTheDocument();
+  });
+
+  it("PTY output_limit 时显示输出超限终止", () => {
+    resetStores(makeSettings(), "idle");
+    useRunManager.setState({
+      runResult: null,
+      ptyExitInfo: { exitCode: null, killedBy: "output_limit", durationMs: 50, maxRssKb: 1024 },
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    expect(screen.getByText("输出超限（已终止）")).toBeInTheDocument();
+  });
+
+  it("PTY cancelled 时显示已取消", () => {
+    resetStores(makeSettings(), "idle");
+    useRunManager.setState({
+      runResult: null,
+      ptyExitInfo: { exitCode: null, killedBy: "cancelled", durationMs: 50, maxRssKb: null },
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    expect(screen.getByText("已取消")).toBeInTheDocument();
+  });
+});

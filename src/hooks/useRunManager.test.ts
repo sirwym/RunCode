@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useRunManager } from "./useRunManager";
-import type { TestRunResult, RunResult, TestProgress } from "../types";
+import type { TestRunResult, RunResult, TestProgress, StartPtyResult } from "../types";
 
 // Mock @tauri-apps/api/core 的 invoke
 const invokeMock = vi.fn();
@@ -433,5 +433,233 @@ describe("useRunManager PTY 编译 warning 保留", () => {
     useRunManager.getState().setActiveTab("tab-b");
     useRunManager.getState().setActiveTab("tab-a");
     expect(useRunManager.getState().compileWarning).toBe(warning);
+  });
+});
+
+// ============ 前端生成 runId 测试 ============
+// 验证 compileRun / runTests 在 invoke 前生成 uuid 写入 activeRunId，
+// 并将 runId 传给后端命令，让停止按钮在请求发出瞬间即可用。
+describe("useRunManager 前端生成 runId", () => {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  beforeEach(() => {
+    useRunManager.setState({
+      activeRunId: null,
+      kind: null,
+      status: "idle",
+      runResult: null,
+      testResult: null,
+      error: null,
+      testProgress: null,
+      ptyRunId: null,
+      ptyExitInfo: null,
+      ptyStartTime: null,
+      compileError: null,
+      compileWarning: null,
+      activeTabId: null,
+      resultsByTab: {},
+    });
+    invokeMock.mockReset();
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => {});
+  });
+
+  it("compileRun 在 invoke 前设置 activeRunId，并传入 uuid 格式的 runId", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce(makeRunResult(true));
+
+    const runPromise = useRunManager.getState().compileRun("code");
+
+    // invoke 发起瞬间 activeRunId 应已设置（不等 await 完成）
+    const activeDuringRun = useRunManager.getState().activeRunId;
+    expect(activeDuringRun).not.toBeNull();
+    expect(activeDuringRun).toMatch(UUID_RE);
+
+    await runPromise;
+
+    // invoke 收到 runId 参数
+    const invokeArgs = invokeMock.mock.calls[0];
+    expect(invokeArgs[0]).toBe("compile_and_run");
+    const invokePayload = invokeArgs[1] as { runId?: string };
+    expect(invokePayload.runId).toBe(activeDuringRun);
+    expect(invokePayload.runId).toMatch(UUID_RE);
+
+    // 完成后 activeRunId 被清除
+    expect(useRunManager.getState().activeRunId).toBeNull();
+  });
+
+  it("runTests 在 invoke 前设置 activeRunId，并传入 uuid 格式的 runId", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce(makeTestRunResult(2, 4));
+
+    const runPromise = useRunManager.getState().runTests("code", "suite-a", false);
+
+    // invoke 发起瞬间 activeRunId 应已设置
+    const activeDuringRun = useRunManager.getState().activeRunId;
+    expect(activeDuringRun).not.toBeNull();
+    expect(activeDuringRun).toMatch(UUID_RE);
+
+    await runPromise;
+
+    // invoke 收到 runId 参数（run_tests 的 payload）
+    const runTestsCall = invokeMock.mock.calls.find((c) => c[0] === "run_tests");
+    expect(runTestsCall).toBeDefined();
+    const invokePayload = runTestsCall![1] as { runId?: string };
+    expect(invokePayload.runId).toBe(activeDuringRun);
+    expect(invokePayload.runId).toMatch(UUID_RE);
+
+    // 完成后 activeRunId 被清除
+    expect(useRunManager.getState().activeRunId).toBeNull();
+  });
+
+  it("compileRun 失败时也清除 activeRunId", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockRejectedValueOnce(new Error("network"));
+
+    await useRunManager.getState().compileRun("code");
+
+    expect(useRunManager.getState().activeRunId).toBeNull();
+    expect(useRunManager.getState().status).toBe("error");
+  });
+
+  it("runTests 失败时也清除 activeRunId", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockRejectedValueOnce(new Error("network"));
+
+    await useRunManager.getState().runTests("code", "suite-a", false);
+
+    expect(useRunManager.getState().activeRunId).toBeNull();
+    expect(useRunManager.getState().status).toBe("error");
+  });
+});
+
+// ============ startInteractive 预生成 runId 测试 ============
+// 验证 startInteractive 在 invoke 前生成 uuid 写入 activeRunId，
+// 并将 runId 传给后端 start_pty_run 命令，让编译期停止按钮可用。
+describe("useRunManager startInteractive 预生成 runId", () => {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  beforeEach(() => {
+    useRunManager.setState({
+      activeRunId: null, kind: null, status: "idle",
+      runResult: null, testResult: null, error: null, testProgress: null,
+      ptyRunId: null, ptyExitInfo: null, ptyStartTime: null,
+      compileError: null, compileWarning: null,
+      activeTabId: null, resultsByTab: {},
+    });
+    invokeMock.mockReset();
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => {});
+  });
+
+  it("startInteractive 在 invoke 前设置 activeRunId，并传入 uuid 格式 runId", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({
+      status: "success",
+      run_id: "pty-1",
+      compile_stdout: "",
+      compile_stderr: "",
+    });
+
+    const runPromise = useRunManager.getState().startInteractive("code");
+    const activeDuringRun = useRunManager.getState().activeRunId;
+    expect(activeDuringRun).not.toBeNull();
+    expect(activeDuringRun).toMatch(UUID_RE);
+
+    await runPromise;
+
+    const call = invokeMock.mock.calls.find((c) => c[0] === "start_pty_run");
+    expect(call).toBeDefined();
+    const payload = call![1] as { runId?: string };
+    expect(payload.runId).toBe(activeDuringRun);
+    expect(payload.runId).toMatch(UUID_RE);
+  });
+});
+
+// ============ stop 后旧请求覆盖守卫测试 ============
+// 验证 compileRun/runTests/startInteractive 在 stop 后旧请求返回时，
+// 回调检测 activeRunId !== runId，丢弃结果，不覆盖 idle 状态。
+describe("useRunManager stop 后旧请求覆盖守卫", () => {
+  beforeEach(() => {
+    useRunManager.setState({
+      activeRunId: null, kind: null, status: "idle",
+      runResult: null, testResult: null, error: null, testProgress: null,
+      ptyRunId: null, ptyExitInfo: null, ptyStartTime: null,
+      compileError: null, compileWarning: null,
+      activeTabId: null, resultsByTab: {},
+    });
+    invokeMock.mockReset();
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => {});
+  });
+
+  it("compileRun 在 stop 后返回成功结果，丢弃不覆盖 idle", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    let resolveRun: (v: RunResult) => void = () => {};
+    invokeMock.mockReturnValueOnce(new Promise<RunResult>((res) => { resolveRun = res; }));
+
+    const runPromise = useRunManager.getState().compileRun("code");
+    const runId = useRunManager.getState().activeRunId;
+    expect(runId).not.toBeNull();
+
+    // 模拟 stop：把 activeRunId 设为 null，status 设为 idle
+    useRunManager.setState({ activeRunId: null, status: "idle", kind: null });
+
+    // 旧请求返回 success
+    resolveRun(makeRunResult(true));
+    await runPromise;
+
+    // 状态应保持 idle，不被 done 覆盖
+    expect(useRunManager.getState().status).toBe("idle");
+    // 结果不写入快照
+    expect(useRunManager.getState().resultsByTab["tab-a"]?.runResult ?? null).toBeNull();
+  });
+
+  it("runTests 在 stop 后返回结果，丢弃不覆盖 idle", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    let resolveRun: (v: TestRunResult) => void = () => {};
+    invokeMock.mockReturnValueOnce(new Promise<TestRunResult>((res) => { resolveRun = res; }));
+
+    const runPromise = useRunManager.getState().runTests("code", "suite-a", false);
+    const runId = useRunManager.getState().activeRunId;
+    expect(runId).not.toBeNull();
+
+    // 模拟 stop
+    useRunManager.setState({ activeRunId: null, status: "idle", kind: null });
+
+    resolveRun(makeTestRunResult(2, 4));
+    await runPromise;
+
+    expect(useRunManager.getState().status).toBe("idle");
+    expect(useRunManager.getState().resultsByTab["tab-a"]?.testResult ?? null).toBeNull();
+  });
+
+  it("startInteractive 在 stop 后返回 success，丢弃并调用 stop_pty_run 清理 PTY", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    let resolveRun: (v: StartPtyResult) => void = () => {};
+    invokeMock.mockReturnValueOnce(new Promise<StartPtyResult>((res) => { resolveRun = res; }));
+
+    const runPromise = useRunManager.getState().startInteractive("code");
+    const runId = useRunManager.getState().activeRunId;
+    expect(runId).not.toBeNull();
+
+    // 模拟 stopInteractive 把 activeRunId 设为 null
+    useRunManager.setState({
+      activeRunId: null, status: "idle", kind: null,
+      ptyRunId: null,
+      ptyExitInfo: { exitCode: null, killedBy: "cancelled", durationMs: 100, maxRssKb: null },
+      ptyStartTime: null,
+    });
+
+    // 旧请求返回 success（PTY 已建立）
+    invokeMock.mockResolvedValueOnce(true); // stop_pty_run
+    resolveRun({ status: "success", run_id: runId!, compile_stdout: "", compile_stderr: "" });
+    await runPromise;
+
+    // 状态保持 idle
+    expect(useRunManager.getState().status).toBe("idle");
+    // 应该调用了 stop_pty_run 清理 PTY
+    const stopCall = invokeMock.mock.calls.find((c) => c[0] === "stop_pty_run");
+    expect(stopCall).toBeDefined();
   });
 });

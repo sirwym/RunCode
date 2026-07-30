@@ -178,18 +178,19 @@ pub fn run() {
             )?;
 
             // 编辑菜单（含查找项，原"查找"顶级菜单已并入）
+            // PredefinedMenuItem 保留原生行为和快捷键，仅显式传入中文标签
             let edit_menu = Submenu::with_items(
                 app,
                 "编辑",
                 true,
                 &[
-                    &PredefinedMenuItem::undo(app, None)?,
-                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::undo(app, Some("撤销"))?,
+                    &PredefinedMenuItem::redo(app, Some("重做"))?,
                     &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::cut(app, None)?,
-                    &PredefinedMenuItem::copy(app, None)?,
-                    &PredefinedMenuItem::paste(app, None)?,
-                    &PredefinedMenuItem::select_all(app, None)?,
+                    &PredefinedMenuItem::cut(app, Some("剪切"))?,
+                    &PredefinedMenuItem::copy(app, Some("复制"))?,
+                    &PredefinedMenuItem::paste(app, Some("粘贴"))?,
+                    &PredefinedMenuItem::select_all(app, Some("全选"))?,
                     &PredefinedMenuItem::separator(app)?,
                     &MenuItem::with_id(app, "edit_format", "格式化", true, Some("Shift+Alt+F"))?,
                     &PredefinedMenuItem::separator(app)?,
@@ -266,7 +267,7 @@ pub fn run() {
                 "帮助",
                 true,
                 &[
-                    &MenuItem::with_id(app, "help", "RunCode 帮助", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "help", "C++ 速查表", true, Some("CmdOrCtrl+Shift+H"))?,
                     &PredefinedMenuItem::separator(app)?,
                     &MenuItem::with_id(app, "toggle_devtools", "切换开发人员工具", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,

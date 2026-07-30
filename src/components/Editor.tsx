@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { EditorSettings, CompileError, CustomThemeColors } from "../types";
 import { useTabs } from "../hooks/useTabs";
 import { CPP_KEYWORDS_ALL, type KeywordKind } from "../monaco/cppKeywords";
+import { CPP_MEMBERS, inferTypeAtDot, buildMemberSuggestions } from "../monaco/cppMembers";
 
 // RunCode 品牌交互色（与 global.css 深色主题一致）
 // Monaco colors 仅接受 HEX（3/4/6/8 位），rgba() 会被忽略并回退到默认色（红色）
@@ -339,17 +340,10 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
     });
     completionDisposablesRef.current.push(keywordDisposable);
 
-    // 代码补全 L2：当前文件符号（函数/全局变量/struct/宏）
+    // 代码补全 L2：成员方法补全（命中已知类型）+ 文件级符号补全（fallback）
     const symbolDisposable = monaco.languages.registerCompletionItemProvider("cpp", {
       triggerCharacters: ["."],
       provideCompletionItems: async (model, position) => {
-        const code = model.getValue();
-        let symbols: CodeSymbol[] = [];
-        try {
-          symbols = await invoke<CodeSymbol[]>("extract_code_symbols", { code });
-        } catch {
-          return { suggestions: [] };
-        }
         const word = model.getWordUntilPosition(position);
         const range = {
           startLineNumber: position.lineNumber,
@@ -357,6 +351,30 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
           startColumn: word.startColumn,
           endColumn: word.endColumn,
         };
+
+        // 先尝试成员方法补全：基于 `.` 左侧变量声明推断类型
+        // 命中已知类型时跳过后端 IPC，零延迟返回成员方法
+        const code = model.getValue();
+        const type = inferTypeAtDot(code, position.lineNumber, position.column);
+        if (type && CPP_MEMBERS[type]) {
+          return {
+            suggestions: buildMemberSuggestions(
+              CPP_MEMBERS[type],
+              range,
+              monaco.languages.CompletionItemKind.Method,
+              monaco.languages.CompletionItemKind.Field,
+              monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
+            ),
+          };
+        }
+
+        // 未命中类型推断，fallback 到文件级符号补全
+        let symbols: CodeSymbol[] = [];
+        try {
+          symbols = await invoke<CodeSymbol[]>("extract_code_symbols", { code });
+        } catch {
+          return { suggestions: [] };
+        }
         const kindMap: Record<string, MonacoLanguagesNS.CompletionItemKind> = {
           function: monaco.languages.CompletionItemKind.Function,
           variable: monaco.languages.CompletionItemKind.Variable,
