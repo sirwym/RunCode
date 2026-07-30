@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Search, Copy, Check } from "lucide-react";
 import { useI18n } from "../hooks/useI18n";
 import { useSettings } from "../hooks/useSettings";
-import { getEffectiveTheme } from "../utils/theme";
+import { getEffectiveTheme, type SettingsTheme } from "../utils/theme";
 import { useColorizedCode } from "../hooks/useColorizedCode";
 import {
   CHEATSHEET_ENTRIES,
@@ -50,7 +50,7 @@ export default function CheatsheetDialog({
   // themeKey：主题切换时触发 snippet 重新 colorize
   const themeKey = themePreview
     ? "custom"
-    : getEffectiveTheme(settings?.general.theme);
+    : getEffectiveTheme(settings?.general.theme as SettingsTheme | undefined);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<CheatCategory | "all">("all");
   const [copiedId, setCopiedId] = useState<string | null>(null);
