@@ -335,7 +335,7 @@ int main() {
     /// 编译仍成功（exit_code=0），但 stderr 不应为空，且应包含 "warning" 关键字。
     #[tokio::test]
     async fn compile_only_preserves_warnings_on_success() {
-        let warning_code = r#"#include <bits/stdc++.h>
+        let warning_code = r#"#include <string>
 using namespace std;
 char _find(string s){
     for (int i=0; i<(int)s.size(); i++){
