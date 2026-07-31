@@ -63,9 +63,11 @@ const VECTOR_MEMBERS: MemberDef[] = [
   { label: "back", detail: "vector", insertText: "back()", documentation: "返回末元素" },
 ];
 
-// ============== deque（vector 全部 + push_front/pop_front） ==============
+// ============== deque（vector 大部分 + push_front/pop_front；deque 无 reserve/capacity） ==============
 const DEQUE_MEMBERS: MemberDef[] = [
-  ...VECTOR_MEMBERS.map((m) => ({ ...m, detail: "deque" })),
+  ...VECTOR_MEMBERS.filter(
+    (m) => m.label !== "reserve" && m.label !== "capacity"
+  ).map((m) => ({ ...m, detail: "deque" })),
   { label: "push_front", detail: "deque", insertText: "push_front(${1:val})", documentation: "头部插入元素" },
   { label: "pop_front", detail: "deque", insertText: "pop_front()", documentation: "删除头部元素" },
 ];

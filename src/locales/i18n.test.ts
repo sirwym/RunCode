@@ -102,6 +102,7 @@ describe("i18n 完整性", () => {
       "settings.shortcutEdit",
       "settings.shortcutFind",
       "settings.shortcutView",
+      "settings.shortcutRun",
       "settings.shortcutApp",
       "settings.testSettings",
       "settings.testTimeLimit",
@@ -141,21 +142,34 @@ describe("i18n 完整性", () => {
     );
   });
 
-  // 速查表扩充（GESP 1-8 级覆盖）新增的类别 key
+  // 速查表扩充（6 大分类：io/syntax/stl/algorithm/dp/graph）新增的类别 key
   describe("cheatsheet 类别 key", () => {
     const requiredCheatsheetKeys = [
       "cheatsheet.catAll",
       "cheatsheet.catSyntax",
       "cheatsheet.catIO",
-      "cheatsheet.catString",
-      "cheatsheet.catContainer",
-      "cheatsheet.catAlgorithm",
-      "cheatsheet.catTemplate",
+      "cheatsheet.catSTL",
+      "cheatsheet.catCommonAlgorithm",
+      "cheatsheet.catDP",
+      "cheatsheet.catGraph",
     ];
 
     it.each(requiredCheatsheetKeys)("zh 与 en 都包含 %s", (k) => {
       expect(getByPath(zh, k), `zh 缺少 ${k}`).toBeTypeOf("string");
       expect(getByPath(en, k), `en 缺少 ${k}`).toBeTypeOf("string");
+    });
+  });
+
+  // 速查表重组后已删除的旧分类 key 不应再存在
+  describe("cheatsheet 已删除的旧分类 key", () => {
+    it.each([
+      "cheatsheet.catString",
+      "cheatsheet.catContainer",
+      "cheatsheet.catAlgorithm",
+      "cheatsheet.catTemplate",
+    ])("%s 应已从 zh 与 en 中删除", (k) => {
+      expect(getByPath(zh, k)).toBeUndefined();
+      expect(getByPath(en, k)).toBeUndefined();
     });
   });
 });

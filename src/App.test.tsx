@@ -72,19 +72,19 @@ vi.mock("./components/TabBar", () => ({
   default: () => <div data-testid="tabbar" />,
 }));
 vi.mock("./components/Editor", () => ({
-  default: () => <div data-testid="editor" />,
+  default: () => <div data-testid="editor" tabIndex={0} />,
 }));
 vi.mock("./components/TestCasesPanel", () => ({
-  default: () => <div data-testid="testcases" />,
+  default: () => <div data-testid="testcases" className="testcases-panel" tabIndex={0} />,
 }));
 vi.mock("./components/Terminal", () => ({
-  default: () => <div data-testid="terminal" />,
+  default: () => <div data-testid="terminal" tabIndex={0} />,
 }));
 vi.mock("./components/StatusBar", () => ({
   default: () => <div data-testid="statusbar" />,
 }));
 vi.mock("./components/SettingsPanel", () => ({
-  default: () => <div data-testid="settings-panel" />,
+  default: () => <div data-testid="settings-panel" tabIndex={0} />,
 }));
 vi.mock("./components/RecentFilesDialog", () => ({
   default: () => <div data-testid="recent-dialog" />,
@@ -102,6 +102,7 @@ import { useSettings } from "./hooks/useSettings";
 import { useRunManager } from "./hooks/useRunManager";
 import { useTabs } from "./hooks/useTabs";
 import { useTestSuite } from "./hooks/useTestSuite";
+import { useTestOptions } from "./hooks/useTestOptions";
 import { useI18n } from "./hooks/useI18n";
 import { zh } from "./locales/zh";
 import type { AppSettings, CustomThemeConfig, CustomThemeColors } from "./types";
@@ -204,6 +205,7 @@ function resetStores(settings: AppSettings) {
     ensureSuiteForDocPath: vi.fn().mockResolvedValue(null),
     ensureSuiteForUntitled: vi.fn().mockResolvedValue(null),
   });
+  useTestOptions.setState({ strict: false, toggleStrict: vi.fn() });
   useI18n.setState({
     locale: "zh",
     t: makeT(),
@@ -228,7 +230,7 @@ if (!window.matchMedia) {
 }
 
 // 动态 import App，确保所有 mock 先就位
-const { default: App } = await import("./App");
+const { default: App, resolveRunShortcut } = await import("./App");
 
 describe("App 自动隐藏逻辑", () => {
   beforeEach(() => {
@@ -1037,5 +1039,320 @@ describe("菜单 handler: toggle_devtools 和 about", () => {
     expect(msgArg).toContain("YuanMing");
     expect(msgArg).toContain("MIT License");
     expect(msgArg).toContain("https://github.com/YuanMing/RunCode");
+  });
+});
+
+// ============ resolveRunShortcut 纯函数测试 ============
+// 验证跨平台快捷键解析：macOS 用 Cmd，Windows 用 Ctrl，拒绝 Alt 和另一平台修饰键
+
+describe("resolveRunShortcut 纯函数", () => {
+  it("macOS: Cmd+Enter → terminal", () => {
+    expect(resolveRunShortcut("Enter", true, false, false, false, true)).toBe("terminal");
+  });
+  it("macOS: Cmd+Shift+Enter → tests", () => {
+    expect(resolveRunShortcut("Enter", true, false, true, false, true)).toBe("tests");
+  });
+  it("macOS: Ctrl+Enter → null（仅响应 Cmd）", () => {
+    expect(resolveRunShortcut("Enter", false, true, false, false, true)).toBeNull();
+  });
+  it("macOS: Cmd+Ctrl+Enter → null（拒绝另一平台修饰键）", () => {
+    expect(resolveRunShortcut("Enter", true, true, false, false, true)).toBeNull();
+  });
+  it("macOS: Cmd+Alt+Enter → null（拒绝 Alt）", () => {
+    expect(resolveRunShortcut("Enter", true, false, false, true, true)).toBeNull();
+  });
+  it("Windows: Ctrl+Enter → terminal", () => {
+    expect(resolveRunShortcut("Enter", false, true, false, false, false)).toBe("terminal");
+  });
+  it("Windows: Ctrl+Shift+Enter → tests", () => {
+    expect(resolveRunShortcut("Enter", false, true, true, false, false)).toBe("tests");
+  });
+  it("Windows: Cmd+Enter → null（仅响应 Ctrl）", () => {
+    expect(resolveRunShortcut("Enter", true, false, false, false, false)).toBeNull();
+  });
+  it("Windows: Ctrl+Alt+Enter → null（拒绝 Alt）", () => {
+    expect(resolveRunShortcut("Enter", false, true, false, true, false)).toBeNull();
+  });
+  it("非 Enter 键 → null", () => {
+    expect(resolveRunShortcut("a", false, true, false, false, false)).toBeNull();
+  });
+  it("无修饰键 Enter → null", () => {
+    expect(resolveRunShortcut("Enter", false, false, false, false, false)).toBeNull();
+  });
+});
+
+// ============ 运行快捷键全链路测试 ============
+// 验证 App 集中 keydown 监听 → 焦点范围限定 → 面板展开 → 标签切换 → 运行回调
+// jsdom 环境 navigator.platform 非 Mac，测试 Windows 快捷键（Ctrl+Enter / Ctrl+Shift+Enter）
+
+describe("运行快捷键（App keydown 链路）", () => {
+  function setupStores(suiteId: string | null) {
+    resetStores(makeSettings());
+    useTabs.setState({
+      tabs: [{
+        id: "tab1",
+        path: null,
+        fileName: "test.cpp",
+        content: "int main(){}",
+        savedContent: "int main(){}",
+        dirty: false,
+        language: "cpp",
+        suiteId,
+      }],
+      activeId: "tab1",
+      newTab: vi.fn(),
+      openTab: vi.fn(),
+      openTabDialog: vi.fn(),
+      closeTab: vi.fn(),
+      closeAll: vi.fn(),
+      switchTab: vi.fn(),
+      saveTab: vi.fn(),
+      saveTabAs: vi.fn(),
+      setContent: vi.fn(),
+      setSuiteId: vi.fn(),
+      restore: vi.fn().mockResolvedValue(undefined),
+      setOnCloseTabs: vi.fn(),
+    });
+    useTestSuite.setState({
+      suiteId,
+      setSuiteId: vi.fn(),
+      ensureSuiteForDocPath: vi.fn().mockResolvedValue(null),
+      ensureSuiteForUntitled: vi.fn().mockResolvedValue(null),
+    });
+    useTestOptions.setState({ strict: false, toggleStrict: vi.fn() });
+  }
+
+  async function settle() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  function getActiveTabText(container: HTMLElement): string {
+    const tabs = container.querySelectorAll(".panel-tab");
+    for (const t of tabs) {
+      if (t.classList.contains("active")) return t.textContent ?? "";
+    }
+    return "";
+  }
+
+  beforeEach(() => {
+    collapseSpy.mockClear();
+    expandSpy.mockClear();
+    listenMock.mockClear();
+    setupStores("suite1");
+  });
+
+  it("编辑器焦点 Ctrl+Enter → 终端运行（参数正确，只调一次）", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+
+    expect(useRunManager.getState().startInteractive).toHaveBeenCalledTimes(1);
+    expect(useRunManager.getState().startInteractive).toHaveBeenCalledWith("int main(){}");
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+  });
+
+  it("编辑器焦点 Ctrl+Shift+Enter → 多样例运行（参数正确，只调一次）", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, shiftKey: true });
+
+    expect(useRunManager.getState().runTests).toHaveBeenCalledTimes(1);
+    expect(useRunManager.getState().runTests).toHaveBeenCalledWith("int main(){}", "suite1", false);
+    expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
+  });
+
+  it("测试面板焦点 Ctrl+Enter → 终端运行", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const testcases = container.querySelector('[data-testid="testcases"]') as HTMLElement;
+    testcases.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+
+    expect(useRunManager.getState().startInteractive).toHaveBeenCalledTimes(1);
+    expect(useRunManager.getState().startInteractive).toHaveBeenCalledWith("int main(){}");
+  });
+
+  it("测试面板焦点 Ctrl+Shift+Enter → 多样例运行", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const testcases = container.querySelector('[data-testid="testcases"]') as HTMLElement;
+    testcases.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, shiftKey: true });
+
+    expect(useRunManager.getState().runTests).toHaveBeenCalledTimes(1);
+    expect(useRunManager.getState().runTests).toHaveBeenCalledWith("int main(){}", "suite1", false);
+  });
+
+  it("测试标签按钮焦点（tab=tests 时 .right-panel 内）Ctrl+Enter → 终端运行", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    // 点击 tests 标签按钮切换到 tests tab
+    const testsTabBtn = container.querySelectorAll(".panel-tab")[1] as HTMLButtonElement;
+    fireEvent.click(testsTabBtn);
+    // 焦点在 tests 标签按钮上（在 .right-panel 内但不在 .testcases-panel 内）
+    testsTabBtn.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+
+    expect(useRunManager.getState().startInteractive).toHaveBeenCalledTimes(1);
+    expect(useRunManager.getState().startInteractive).toHaveBeenCalledWith("int main(){}");
+  });
+
+  it("auto_hide_panel=false 时运行仍调用 expand()", async () => {
+    // makeSettings 默认 auto_hide_panel=false
+    const { container } = render(<App />);
+    await settle();
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    expandSpy.mockClear(); // 清除 mount 期间的调用
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+
+    expect(expandSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("终端运行切换到 terminal 标签", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    // 先切换到 tests tab
+    const testsTabBtn = container.querySelectorAll(".panel-tab")[1] as HTMLButtonElement;
+    fireEvent.click(testsTabBtn);
+    expect(getActiveTabText(container)).toBe(zh.panel.tests);
+
+    // 编辑器焦点下 Ctrl+Enter → 切换到 terminal
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+
+    expect(getActiveTabText(container)).toBe(zh.panel.terminal);
+  });
+
+  it("多样例运行切换到 tests 标签", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    // 默认 tab 是 terminal
+    expect(getActiveTabText(container)).toBe(zh.panel.terminal);
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, shiftKey: true });
+
+    expect(getActiveTabText(container)).toBe(zh.panel.tests);
+  });
+
+  it("普通 Enter 不触发任何运行（测试输入框中正常换行）", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const testcases = container.querySelector('[data-testid="testcases"]') as HTMLElement;
+    testcases.focus();
+    fireEvent.keyDown(window, { key: "Enter" });
+
+    expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+  });
+
+  it("错误平台修饰键（metaKey）不触发", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+
+    expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+  });
+
+  it("Alt 组合不触发", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, altKey: true });
+
+    expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+  });
+
+  it("重复按键（repeat=true）不触发", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, repeat: true });
+
+    expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+  });
+
+  it("输入法组合状态（isComposing=true）不触发", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, isComposing: true });
+
+    expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+  });
+
+  it("终端焦点不触发", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    // tab 默认为 terminal，Terminal 在 .right-panel 内但 currentTab !== "tests"
+    const terminal = container.querySelector('[data-testid="terminal"]') as HTMLElement;
+    terminal.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+
+    expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+  });
+
+  it("设置面板焦点不触发", async () => {
+    const { container } = render(<App />);
+    await settle();
+
+    const settings = container.querySelector('[data-testid="settings-panel"]') as HTMLElement;
+    settings.focus();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+
+    expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+  });
+
+  it("suiteId 暂未就绪时：打开 tests 标签但不调用 runTests", async () => {
+    // 重新设置：suiteId 为 null，tab 也无 suiteId
+    setupStores(null);
+    const { container } = render(<App />);
+    await settle();
+
+    const editor = container.querySelector('[data-testid="editor"]') as HTMLElement;
+    editor.focus();
+    expandSpy.mockClear();
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, shiftKey: true });
+
+    // runTests 不应被调用（suiteId 未就绪）
+    expect(useRunManager.getState().runTests).not.toHaveBeenCalled();
+    // 但标签应切换到 tests
+    expect(getActiveTabText(container)).toBe(zh.panel.tests);
+    // 且面板应展开（revealPanel 无条件调用 expand）
+    expect(expandSpy).toHaveBeenCalledTimes(1);
   });
 });

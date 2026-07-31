@@ -178,6 +178,7 @@ export const en = {
     shortcutEdit: "Edit",
     shortcutFind: "Find",
     shortcutView: "View",
+    shortcutRun: "Run",
     shortcutApp: "App",
     warningsNone: "None",
     // Custom image theme
@@ -295,9 +296,9 @@ export const en = {
     catAll: "All",
     catSyntax: "Syntax",
     catIO: "I/O",
-    catString: "String",
-    catContainer: "Container",
-    catAlgorithm: "Algorithm / STL",
-    catTemplate: "Template",
+    catSTL: "STL Containers/Algorithms",
+    catCommonAlgorithm: "Common Algorithms",
+    catDP: "Dynamic Programming",
+    catGraph: "Graph Theory",
   },
 } as const;

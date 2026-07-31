@@ -36,12 +36,12 @@ describe("CheatsheetDialog", () => {
     expect(groupTitles.length).toBe(6);
     const texts = Array.from(groupTitles).map((el) => el.textContent);
     expect(texts).toEqual([
-      "语法",
       "输入输出",
-      "字符串",
-      "容器",
-      "算法 / STL",
-      "模板",
+      "语法",
+      "STL 容器/算法",
+      "常用算法",
+      "动态规划",
+      "图论",
     ]);
   });
 
@@ -54,13 +54,13 @@ describe("CheatsheetDialog", () => {
     expect(names.length).toBeGreaterThan(0);
   });
 
-  it("点击 chip 过滤分类（字符串）", () => {
+  it("点击 chip 过滤分类（动态规划）", () => {
     render(<CheatsheetDialog open={true} onClose={() => {}} />);
     // chip 在 .cheatsheet-categories 容器内，区别于分组小标题
     const categoriesEl = document.querySelector(".cheatsheet-categories");
     expect(categoriesEl).toBeTruthy();
-    const stringChip = within(categoriesEl as HTMLElement).getByText("字符串");
-    fireEvent.click(stringChip);
+    const dpChip = within(categoriesEl as HTMLElement).getByText("动态规划");
+    fireEvent.click(dpChip);
     // 输入输出分类的 entry name（如 printf）应消失
     expect(screen.queryByText("printf")).toBeNull();
   });
@@ -117,5 +117,20 @@ describe("CheatsheetDialog", () => {
       );
       expect(hasSpan).toBe(true);
     });
+  });
+
+  it("搜索关键字时 name/title/summary 中出现 <mark> 高亮", () => {
+    render(<CheatsheetDialog open={true} onClose={() => {}} />);
+    const input = screen.getByPlaceholderText("搜索语法、STL、算法……");
+    fireEvent.change(input, { target: { value: "string" } });
+    // 命中条目的 name/title/summary 中应出现 <mark class="cheatsheet-hl">
+    const marks = document.querySelectorAll("mark.cheatsheet-hl");
+    expect(marks.length).toBeGreaterThan(0);
+  });
+
+  it("空 query 时不存在 <mark> 高亮元素", () => {
+    render(<CheatsheetDialog open={true} onClose={() => {}} />);
+    const marks = document.querySelectorAll("mark.cheatsheet-hl");
+    expect(marks.length).toBe(0);
   });
 });

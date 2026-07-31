@@ -37,6 +37,35 @@ import { hexToRgb } from "./utils/colorExtract";
 
 type PanelTab = "tests" | "terminal";
 
+/**
+ * 解析运行快捷键：根据按键事件和平台返回 "terminal" | "tests" | null。
+ *
+ * 纯函数，便于单元测试 macOS/Windows 双平台映射。
+ * 规则：
+ * - 必须是 Enter 键
+ * - 拒绝 Alt 组合（避免与其他快捷键冲突）
+ * - macOS 主修饰键为 Cmd，Windows 主修饰键为 Ctrl
+ * - 拒绝另一平台修饰键同时按下
+ * - Shift 区分终端运行（无 Shift）与多样例运行（有 Shift）
+ */
+export function resolveRunShortcut(
+  key: string,
+  metaKey: boolean,
+  ctrlKey: boolean,
+  shiftKey: boolean,
+  altKey: boolean,
+  isMac: boolean,
+): "terminal" | "tests" | null {
+  if (key !== "Enter") return null;
+  if (altKey) return null;
+  if (isMac) {
+    if (!metaKey || ctrlKey) return null;
+  } else {
+    if (!ctrlKey || metaKey) return null;
+  }
+  return shiftKey ? "tests" : "terminal";
+}
+
 // 编辑器字号范围
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 32;
@@ -144,6 +173,13 @@ function App() {
 
   // 持有终端焦点状态，供字号缩放菜单事件分发使用
   const terminalFocusedRef = useRef(false);
+
+  // 持有最新运行回调与当前 tab，供跨平台 keydown 监听器读取（避免陈旧闭包）
+  const runHandlersRef = useRef<{
+    handleRun: () => void;
+    handleRunTests: () => void;
+    tab: PanelTab;
+  }>({ handleRun: () => {}, handleRunTests: () => {}, tab: "terminal" });
 
   // 布局方向 & 自动隐藏
   const layout = settings?.general.layout ?? "horizontal";
@@ -752,6 +788,33 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, []);
 
+  // 跨平台运行快捷键：Cmd/Ctrl+Enter（终端运行）、Shift+Cmd/Ctrl+Enter（多样例运行）
+  // capture 阶段接管，焦点限定在编辑器、测试面板或当前 tests 标签的右侧面板内
+  useEffect(() => {
+    const handleRunKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (e.isComposing) return;
+      const action = resolveRunShortcut(e.key, e.metaKey, e.ctrlKey, e.shiftKey, e.altKey, isMac);
+      if (!action) return;
+      const ae = document.activeElement;
+      if (!ae) return;
+      const { tab: currentTab, handleRun, handleRunTests } = runHandlersRef.current;
+      const inEditor = ae.closest(".editor-container");
+      const inTestCases = ae.closest(".testcases-panel");
+      const inRightPanel = currentTab === "tests" && ae.closest(".right-panel");
+      if (!inEditor && !inTestCases && !inRightPanel) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (action === "terminal") {
+        handleRun();
+      } else {
+        handleRunTests();
+      }
+    };
+    window.addEventListener("keydown", handleRunKeyDown, true);
+    return () => window.removeEventListener("keydown", handleRunKeyDown, true);
+  }, [isMac]);
+
   // 监听 PTY 首次输入事件：重置计时起点为用户首次输入时刻
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
@@ -768,21 +831,29 @@ function App() {
     };
   }, []);
 
+  // 统一面板显示：切换 tab 并无条件展开（expand 幂等，无需 autoHide 判断）
+  const revealPanel = useCallback((targetTab: PanelTab) => {
+    setTab(targetTab);
+    rightPanelRef.current?.expand();
+  }, []);
+
   const handleRun = useCallback(() => {
     if (!activeTab) return;
-    setTab("terminal");
-    if (autoHide) rightPanelRef.current?.expand();
+    revealPanel("terminal");
     const current = editorRef.current?.getCode() ?? activeTab.content;
     void startInteractive(current);
-  }, [activeTab, startInteractive, autoHide]);
+  }, [activeTab, startInteractive, revealPanel]);
 
   const handleRunTests = useCallback(() => {
-    if (!activeTab || !suiteId) return;
-    setTab("tests");
-    if (autoHide) rightPanelRef.current?.expand();
+    if (!activeTab) return;
+    revealPanel("tests");
+    if (!suiteId) return;
     const current = editorRef.current?.getCode() ?? activeTab.content;
     void runTests(current, suiteId, strict);
-  }, [activeTab, suiteId, runTests, strict, autoHide]);
+  }, [activeTab, suiteId, runTests, strict, revealPanel]);
+
+  // 同步最新运行回调与 tab 到 ref，供 keydown 监听器读取
+  runHandlersRef.current = { handleRun, handleRunTests, tab };
 
   const handlePtyExit = useCallback(
     (exitCode: number | null, killedBy: string | null, maxRssKb: number | null) => {
@@ -849,7 +920,6 @@ function App() {
                 useRunManager.setState({ compileError: null });
               }
             }}
-            onRun={handleRun}
             onCursorPositionChange={handleCursorPositionChange}
             settings={settings?.editor}
             theme={effectiveTheme}

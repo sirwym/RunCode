@@ -114,7 +114,6 @@ export interface EditorHandle {
 
 interface EditorPaneProps {
   onContentChange: (tabId: string, content: string) => void;
-  onRun: () => void;
   /** 光标位置变化回调（用于 StatusBar 显示 Ln/Col） */
   onCursorPositionChange?: (line: number, col: number) => void;
   /** 编辑器设置（来自 settings.editor） */
@@ -128,7 +127,7 @@ interface EditorPaneProps {
 }
 
 const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane(
-  { onContentChange, onRun, onCursorPositionChange, settings, theme, customColors, baseMode },
+  { onContentChange, onCursorPositionChange, settings, theme, customColors, baseMode },
   ref
 ) {
   const editorRef = useRef<MonacoEditorNS.IStandaloneCodeEditor | null>(null);
@@ -271,17 +270,6 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
     // 修复 Bug 1：defineTheme 后立即应用，避免首次挂载回退到默认 vs（浅色）
     monaco.editor.setTheme(monacoThemeRef.current);
 
-    // 注册 Cmd+Enter / Ctrl+Enter 触发运行
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-      onRun();
-    });
-
-    // macOS 上 Cmd+Enter 也走上面这条；额外加一条避免被默认换行吞掉
-    editor.addCommand(
-      monaco.KeyMod.WinCtrl | monaco.KeyCode.Enter,
-      () => onRun()
-    );
-
     // 光标位置变化回调（用于 StatusBar 显示 Ln/Col）
     editor.onDidChangeCursorPosition((e) => {
       onCursorPositionChangeRef.current?.(e.position.lineNumber, e.position.column);
@@ -393,7 +381,7 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
       },
     });
     completionDisposablesRef.current.push(symbolDisposable);
-  }, [onRun]);
+  }, []);
 
   // 计算 Monaco 主题：由 effectiveTheme（general.theme 派生）决定
   // settings.editor.theme 已废弃，渲染层不再读取

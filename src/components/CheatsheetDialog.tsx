@@ -7,6 +7,7 @@ import { useColorizedCode } from "../hooks/useColorizedCode";
 import {
   CHEATSHEET_ENTRIES,
   searchCheatsheet,
+  highlightText,
   CHEATSHEET_CATEGORIES,
   type CheatCategory,
   type CheatEntry,
@@ -69,7 +70,7 @@ export default function CheatsheetDialog({
     [query, category],
   );
 
-  // 按 category 分组（保持 CHEATSHEET_CATEGORIES 顺序）
+  // 按 category 分组（保持 results 顺序，即分组内最高分顺序）
   const grouped = useMemo(() => {
     const map = new Map<CheatCategory, CheatEntry[]>();
     for (const r of results) {
@@ -79,6 +80,18 @@ export default function CheatsheetDialog({
     }
     return map;
   }, [results]);
+
+  // 分组渲染顺序：有 query 时按分组内最高分（results 首次出现顺序）排；
+  // 空 query 时保持 CHEATSHEET_CATEGORIES 原顺序
+  const groupOrder = useMemo(() => {
+    const cats = CHEATSHEET_CATEGORIES.filter((c) => c.id !== "all");
+    if (!query.trim()) return cats;
+    const orderedIds: CheatCategory[] = [];
+    for (const r of results) {
+      if (!orderedIds.includes(r.category)) orderedIds.push(r.category);
+    }
+    return orderedIds.map((id) => cats.find((c) => c.id === id)!).filter(Boolean);
+  }, [query, results]);
 
   const handleCopy = async (entry: CheatEntry) => {
     const text = entry.snippets.map((s) => s.code).join("\n");
@@ -132,7 +145,7 @@ export default function CheatsheetDialog({
           {results.length === 0 && (
             <div className="cheatsheet-empty">{t("cheatsheet.noResults")}</div>
           )}
-          {CHEATSHEET_CATEGORIES.filter((c) => c.id !== "all").map((c) => {
+          {groupOrder.map((c) => {
             const items = grouped.get(c.id as CheatCategory);
             if (!items || items.length === 0) return null;
             return (
@@ -141,10 +154,18 @@ export default function CheatsheetDialog({
                 {items.map((entry) => (
                   <article key={entry.id} className="cheatsheet-entry">
                     <div className="cheatsheet-entry-header">
-                      <code className="cheatsheet-entry-name">{entry.name}</code>
-                      <span className="cheatsheet-entry-title">
-                        {entry.title}
-                      </span>
+                      <code
+                        className="cheatsheet-entry-name"
+                        dangerouslySetInnerHTML={{
+                          __html: highlightText(entry.name, query),
+                        }}
+                      />
+                      <span
+                        className="cheatsheet-entry-title"
+                        dangerouslySetInnerHTML={{
+                          __html: highlightText(entry.title, query),
+                        }}
+                      />
                       <button
                         className="cheatsheet-copy"
                         onClick={() => void handleCopy(entry)}
@@ -158,7 +179,12 @@ export default function CheatsheetDialog({
                         )}
                       </button>
                     </div>
-                    <p className="cheatsheet-entry-summary">{entry.summary}</p>
+                    <p
+                      className="cheatsheet-entry-summary"
+                      dangerouslySetInnerHTML={{
+                        __html: highlightText(entry.summary, query),
+                      }}
+                    />
                     <div className="cheatsheet-snippets">
                       {entry.snippets.map((s, i) => (
                         <div key={i} className="cheatsheet-snippet">

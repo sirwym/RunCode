@@ -55,7 +55,7 @@ const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(na
 // 快捷键平台专属定义（与 lib.rs 菜单、TitleBar、App keydown 对齐）
 // macKeys / windowsKeys 缺省表示该平台无此快捷键
 interface ShortcutDefinition {
-  category: "file" | "edit" | "find" | "view" | "app";
+  category: "file" | "edit" | "find" | "view" | "run" | "app";
   action: string;
   macKeys?: string;
   windowsKeys?: string;
@@ -91,6 +91,9 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   { category: "view", action: "menu.fontReset", macKeys: "Cmd+0", windowsKeys: "Ctrl+0" },
   { category: "view", action: "menu.togglePanel", macKeys: "Cmd+\\", windowsKeys: "Ctrl+\\" },
   { category: "view", action: "menu.helpContent", macKeys: "Cmd+Shift+H", windowsKeys: "Ctrl+Shift+H" },
+  // 运行（终端运行 / 多样例运行，由 App 集中 keydown 接管）
+  { category: "run", action: "toolbar.run", macKeys: "Cmd+Enter", windowsKeys: "Ctrl+Enter" },
+  { category: "run", action: "tests.run", macKeys: "Cmd+Shift+Enter", windowsKeys: "Ctrl+Shift+Enter" },
   // 应用（DevTools：macOS Cmd+Alt+I，Windows Ctrl+Shift+I）
   { category: "app", action: "menu.settings", macKeys: "Cmd+,", windowsKeys: "Ctrl+," },
   { category: "app", action: "menu.toggleDevtools", macKeys: "Cmd+Alt+I", windowsKeys: "Ctrl+Shift+I" },
@@ -109,6 +112,7 @@ export const SHORTCUT_CATEGORY_KEY: Record<string, string> = {
   edit: "settings.shortcutEdit",
   find: "settings.shortcutFind",
   view: "settings.shortcutView",
+  run: "settings.shortcutRun",
   app: "settings.shortcutApp",
 };
 

@@ -166,6 +166,12 @@ describe("CPP_MEMBERS 数据完整性", () => {
     expect(labels).toContain("pop_front");
   });
 
+  it("deque 不含 reserve/capacity（std::deque 无此方法）", () => {
+    const labels = CPP_MEMBERS.deque.map((m) => m.label);
+    expect(labels).not.toContain("reserve");
+    expect(labels).not.toContain("capacity");
+  });
+
   it("list 比 deque 多链表特有方法", () => {
     const labels = CPP_MEMBERS.list.map((m) => m.label);
     const listOnly = ["splice", "unique", "remove", "remove_if", "sort", "reverse", "merge"];

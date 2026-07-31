@@ -178,6 +178,7 @@ export const zh = {
     shortcutEdit: "编辑",
     shortcutFind: "查找",
     shortcutView: "视图",
+    shortcutRun: "运行",
     shortcutApp: "应用",
     warningsNone: "无",
     // 自定义图片主题
@@ -295,9 +296,9 @@ export const zh = {
     catAll: "全部",
     catSyntax: "语法",
     catIO: "输入输出",
-    catString: "字符串",
-    catContainer: "容器",
-    catAlgorithm: "算法 / STL",
-    catTemplate: "模板",
+    catSTL: "STL 容器/算法",
+    catCommonAlgorithm: "常用算法",
+    catDP: "动态规划",
+    catGraph: "图论",
   },
 } as const;

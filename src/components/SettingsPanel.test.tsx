@@ -242,6 +242,22 @@ describe("getShortcuts 平台筛选", () => {
     expect(win.find((s) => s.action === "menu.togglePanel")?.keys).toBe("Ctrl+\\");
   });
 
+  it("运行分类包含终端运行和多样例运行两项", () => {
+    const runActions = SHORTCUT_DEFINITIONS.filter((s) => s.category === "run").map((s) => s.action);
+    expect(runActions).toContain("toolbar.run");
+    expect(runActions).toContain("tests.run");
+  });
+
+  it("终端运行快捷键：macOS Cmd+Enter / Windows Ctrl+Enter", () => {
+    expect(mac.find((s) => s.action === "toolbar.run")?.keys).toBe("Cmd+Enter");
+    expect(win.find((s) => s.action === "toolbar.run")?.keys).toBe("Ctrl+Enter");
+  });
+
+  it("多样例运行快捷键：macOS Cmd+Shift+Enter / Windows Ctrl+Shift+Enter", () => {
+    expect(mac.find((s) => s.action === "tests.run")?.keys).toBe("Cmd+Shift+Enter");
+    expect(win.find((s) => s.action === "tests.run")?.keys).toBe("Ctrl+Shift+Enter");
+  });
+
   it("每项 keys 非空", () => {
     for (const s of [...mac, ...win]) {
       expect(s.keys.length).toBeGreaterThan(0);
@@ -328,7 +344,8 @@ describe("SettingsPanel 快捷键 tab 渲染", () => {
     const isMac = typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
     for (const s of getShortcuts(isMac)) {
       const expected = getByPath(zh, s.action);
-      expect(tableScope.getByText(expected as string), `action ${s.action} 文案未渲染`).toBeInTheDocument();
+      // 使用 getAllByText：某些 action 文案可能与 category 文案重名（如 toolbar.run="运行" 与 shortcutRun="运行"）
+      expect(tableScope.getAllByText(expected as string).length, `action ${s.action} 文案未渲染`).toBeGreaterThan(0);
     }
   });
 

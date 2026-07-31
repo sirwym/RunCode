@@ -1702,6 +1702,7 @@ body::before {
 .cheatsheet-dialog {
   padding: 16px;
   gap: 12px;
+  height: 80vh;
   max-height: 80vh;
 }
 
@@ -1747,10 +1748,20 @@ body::before {
   color: var(--primary);
 }
 
-/* 结果区：可滚动，最大高度与 Dialog 协同 */
+/* 结果区：固定高度，内部滚动（与设置面板对齐，不随内容塌陷） */
 .cheatsheet-results {
+  height: 60vh;
   max-height: 60vh;
   border: 1px solid var(--border);
+  flex: 1;
+  min-height: 0;
+}
+/* 覆盖 Radix ScrollArea Viewport 内部的 display: table wrapper。
+   table 会随内容撑开宽度，导致 pre 的 overflow-x: auto 失效，
+   长代码（如树链剖分、tree-center）会把复制按钮推出可视区。
+   改为 block 后，pre 内部可正常水平滚动，整行不再被撑开。 */
+.cheatsheet-results [data-radix-scroll-area-viewport] > div {
+  display: block !important;
 }
 
 /* 分组小标题 */
@@ -1767,15 +1778,17 @@ body::before {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin: 0;
-  padding: 8px 12px 6px;
+  padding: 8px 18px 6px 12px;
   border-bottom: 1px solid var(--border);
   z-index: 1;
 }
 
-/* 单条条目 */
+/* 单条条目（右 padding 18px：为 Radix ScrollArea 叠加滚动条预留空间，避免复制按钮被遮挡） */
 .cheatsheet-entry {
-  padding: 10px 12px;
+  padding: 10px 18px 10px 12px;
   border-bottom: 1px solid var(--border);
+  /* 阻止 entry 自身被内部长代码撑开，强制约束在父级宽度内 */
+  min-width: 0;
 }
 .cheatsheet-entry:last-child {
   border-bottom: none;
@@ -1785,6 +1798,8 @@ body::before {
   align-items: center;
   gap: 8px;
   margin-bottom: 4px;
+  /* flex 子项默认 min-width: auto 会被内容撑开，导致复制按钮被推出可视区 */
+  min-width: 0;
 }
 .cheatsheet-entry-name {
   font-family: var(--font-mono);
@@ -1828,6 +1843,8 @@ body::before {
   flex-direction: column;
   gap: 2px;
   margin: 4px 0;
+  /* flex item 默认 min-width: auto，会阻止 pre 收缩；改为 0 让 pre 可正确触发 overflow-x */
+  min-width: 0;
 }
 .cheatsheet-snippet-code {
   font-family: var(--font-mono);
@@ -1839,6 +1856,8 @@ body::before {
   margin: 0;
   overflow-x: auto;
   white-space: pre;
+  /* 强制约束 pre 宽度，长代码在 pre 内部水平滚动，不撑开外层布局 */
+  max-width: 100%;
 }
 .cheatsheet-snippet-comment {
   font-size: 11px;
@@ -1853,6 +1872,13 @@ body::before {
   text-align: center;
   color: var(--text-muted);
   font-size: 13px;
+}
+
+/* 搜索关键字高亮（warning 琥珀色，避免与品牌色 primary 混淆） */
+.cheatsheet-hl {
+  background: var(--warning-soft);
+  color: var(--warning);
+  padding: 0 1px;
 }
 
 /* ============== 设置面板：代码模板 Monaco 编辑器 ============== */
