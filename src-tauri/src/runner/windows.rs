@@ -69,7 +69,8 @@ pub async fn run_with_limits(
     let h_job = create_job_with_limits(limits.cpu_secs)?;
 
     // 把子进程加入 JobObject（Windows 8+ 允许把已启动的进程加入 JobObject）
-    assign_process_to_job(h_job.0, pid)?;
+    // 返回 true=正常，false=降级（CPU 时间限制未生效，仅墙钟超时可用）
+    let job_object_degraded = assign_process_to_job(h_job.0, pid)?;
 
     // 写 stdin（独立任务，避免阻塞 select）
     if let Some(input) = stdin {
@@ -201,6 +202,7 @@ pub async fn run_with_limits(
         killed_by,
         truncated: stdout_trunc || stderr_trunc,
         max_rss_kb,
+        job_object_degraded,
     })
 }
 
@@ -250,7 +252,9 @@ fn create_job_with_limits(cpu_secs: u64) -> Result<SendHandle, AppError> {
 }
 
 /// 把进程加入 JobObject
-fn assign_process_to_job(h_job: HANDLE, pid: u32) -> Result<(), AppError> {
+/// 返回 true 表示成功加入（CPU 时间限制生效）；
+/// 返回 false 表示降级（AssignProcessToJobObject 失败，仅墙钟超时可用）。
+fn assign_process_to_job(h_job: HANDLE, pid: u32) -> Result<bool, AppError> {
     use windows::Win32::System::Threading::OpenProcess;
     use windows::Win32::System::Threading::PROCESS_SET_QUOTA;
 
@@ -264,12 +268,15 @@ fn assign_process_to_job(h_job: HANDLE, pid: u32) -> Result<(), AppError> {
         // 父 JobObject 中且不允许 breakaway）会返回 ERROR_ACCESS_DENIED。
         // 此时 CPU 时间限制失效，但墙钟超时仍能防死循环，足够教学场景使用。
         // 普通用户机器（不处于 JobObject 中）不受影响，CPU 限制正常。
-        if let Err(e) = AssignProcessToJobObject(h_job, h_process) {
+        let degraded = if let Err(e) = AssignProcessToJobObject(h_job, h_process) {
             eprintln!("警告: AssignProcessToJobObject 失败 ({e}), CPU 限制将不生效");
-        }
+            true // 降级
+        } else {
+            false
+        };
 
         let _ = CloseHandle(h_process);
-        Ok(())
+        Ok(degraded)
     }
 }
 

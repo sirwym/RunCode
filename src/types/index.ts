@@ -38,6 +38,8 @@ export interface RunResult {
   stage: RunStage;
   /** 运行阶段内存峰值（KB）。编译失败时为 0 */
   max_rss_kb: number;
+  /** Windows JobObject 降级标志（CPU 时间限制未生效）。编译失败时为 false */
+  job_object_degraded: boolean;
 }
 
 // ============ 文件型测试套件 ============
@@ -101,6 +103,8 @@ export interface TestRunResult {
   /** 本次测试编译实际使用的优化级别（运行开始时快照） */
   used_opt_level: string;
   results: TestCaseResult[];
+  /** 本次测试是否发生 JobObject 降级（任意一例降级则为 true） */
+  job_object_degraded: boolean;
 }
 
 // test_progress 事件（与 Rust 端 TestProgress 对应，tag = "status"）

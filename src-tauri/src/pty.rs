@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{ChildKiller, MasterPty, PtySize};
@@ -111,6 +112,10 @@ pub struct PtyManager {
     sessions: Mutex<HashMap<String, PtySession>>,
     /// 已收到首次输入的 run_id 集合（用于 pty_first_input 事件去重）
     first_input_emitted: Mutex<HashSet<String>>,
+    /// 已取消的 run_id 集合对应的取消标志。
+    /// stop_pty_run 设置标志，等待线程 emit pty_exit 前检查，
+    /// 若已取消则跳过 emit，保证 pty_exit 单次 emit 语义。
+    cancelled_flags: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl PtyManager {
@@ -118,12 +123,33 @@ impl PtyManager {
         Self {
             sessions: Mutex::new(HashMap::new()),
             first_input_emitted: Mutex::new(HashSet::new()),
+            cancelled_flags: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn insert(&self, run_id: &str, session: PtySession) {
         if let Ok(mut sessions) = self.sessions.lock() {
             sessions.insert(run_id.to_string(), session);
+        }
+    }
+
+    /// 注册 cancelled 标志并返回 Arc 副本，供等待线程检查。
+    /// 必须在 spawn 等待线程前调用。
+    pub fn register_cancelled_flag(&self, run_id: &str) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        if let Ok(mut flags) = self.cancelled_flags.lock() {
+            flags.insert(run_id.to_string(), flag.clone());
+        }
+        flag
+    }
+
+    /// 标记会话已取消（stop_pty_run 调用）。
+    /// 等待线程检查此标志以跳过重复 emit。
+    pub fn mark_cancelled(&self, run_id: &str) {
+        if let Ok(flags) = self.cancelled_flags.lock() {
+            if let Some(flag) = flags.get(run_id) {
+                flag.store(true, Ordering::Relaxed);
+            }
         }
     }
 
@@ -134,6 +160,10 @@ impl PtyManager {
         // 清理首次输入标记
         if let Ok(mut set) = self.first_input_emitted.lock() {
             set.remove(run_id);
+        }
+        // 清理 cancelled 标记
+        if let Ok(mut flags) = self.cancelled_flags.lock() {
+            flags.remove(run_id);
         }
     }
 

@@ -45,6 +45,7 @@ function makeRunResult(success: boolean): RunResult {
     truncated: false,
     stage: "ran",
     max_rss_kb: 1024,
+    job_object_degraded: false,
   };
 }
 

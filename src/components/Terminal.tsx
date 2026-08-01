@@ -161,9 +161,6 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
   // 保存最新的 onFocusChange，避免 effect 频繁重建
   const onFocusChangeRef = useRef(onFocusChange);
   onFocusChangeRef.current = onFocusChange;
-  // 保存最新的 compileWarning，runId effect 在 term.reset() 后写入（避免被 reset 清除）
-  const compileWarningRef = useRef(compileWarning);
-  compileWarningRef.current = compileWarning;
 
   // 右键菜单状态
   const t = useI18n((s) => s.t);
@@ -307,6 +304,15 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     term.write(`\r\n\x1b[31m${compileError}\x1b[0m\r\n`);
   }, [compileError]);
 
+  // compileWarning 变化时显示编译警告（黄色 \x1b[33m）。
+  // 独立 effect：ptyRunId 在 invoke 前就设置（让监听器提前注册），
+  // compileWarning 在 invoke 返回后才设置，需独立 effect 才能在 PTY 输出前写入。
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || !compileWarning || !runId) return;
+    term.write(`\r\n\x1b[33m${compileWarning}\x1b[0m\r\n`);
+  }, [compileWarning, runId]);
+
   // runId 变化时绑定/解绑事件 + onData
   useEffect(() => {
     const term = termRef.current;
@@ -315,18 +321,12 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     // 清空终端（新会话）
     term.reset();
 
-    // 编译成功但有 warning 时，在 PTY 交互输出前显示 warning（黄色 \x1b[33m）。
-    // 必须在 term.reset() 之后、PTY 输出事件 setup 之前同步写入，
-    // 否则会被 reset 清除或被后续 PTY 输出覆盖时序混乱。
-    // warning 不阻止程序启动，PTY 会话正常建立，用户仍可输入交互。
-    const warning = compileWarningRef.current;
-    if (warning) {
-      term.write(`\r\n\x1b[33m${warning}\x1b[0m\r\n`);
-    }
-
+    // compileWarning 改为独立 effect 处理（ptyRunId 提前设置后，warning 在 invoke 返回后才到达）
     // 监听 PTY 输出
     let unlistenOutput: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
+    // disposed 标志：防止 cleanup 在 setup 的 await listen 完成前调用导致监听器泄漏
+    let disposed = false;
 
     const setup = async () => {
       // 输出节流：用 rAF 批量 write，避免死循环刷屏程序淹没事件循环
@@ -351,6 +351,12 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
           }
         },
       );
+      // cleanup 已在 await 期间调用，立即清理刚注册的监听器
+      if (disposed) {
+        unlistenOutput();
+        unlistenOutput = null;
+        return;
+      }
 
       unlistenExit = await listen<{
         run_id: string;
@@ -372,6 +378,10 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
           onExitRef.current(e.payload.exit_code, e.payload.killed_by, e.payload.max_rss_kb || null);
         }
       });
+      if (disposed) {
+        unlistenExit();
+        unlistenExit = null;
+      }
     };
     void setup();
 
@@ -395,6 +405,7 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     }
 
     return () => {
+      disposed = true;
       if (unlistenOutput) unlistenOutput();
       if (unlistenExit) unlistenExit();
       dataDisposable.dispose();

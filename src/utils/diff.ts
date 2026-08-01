@@ -5,7 +5,7 @@
 // - 复杂度保护：当输入总长度 > FALLBACK_THRESHOLD 时降级为简单对齐 diff
 // - 行号 1-based，null 表示该侧独有
 
-export type DiffLineType = "equal" | "modified" | "added" | "removed";
+export type DiffLineType = "equal" | "modified" | "added" | "removed" | "truncated";
 
 export interface DiffLine {
   /** 实际侧行号（1-based），null 表示此行是期望侧独有 */
@@ -19,8 +19,14 @@ export interface DiffLine {
   type: DiffLineType;
 }
 
-/** 总长度超过此阈值（约 5MB）时降级为简单对齐 diff，避免 JS 阻塞主线程 */
-const FALLBACK_THRESHOLD = 5_000_000;
+/** 字符总数超过此阈值时直接降级，避免 splitLines 本身耗时 */
+const FALLBACK_THRESHOLD = 10_000_000;
+
+/** 行数乘积超过此阈值时降级（5000×5000=25M，矩阵约 100MB，可控） */
+const MAX_LINE_PRODUCT = 5000 * 5000;
+
+/** diff 展示行数上限，超过则截断并附加 truncated 提示行 */
+const MAX_DIFF_LINES = 5000;
 
 /** 按行切分字符串，保留空行；末尾换行不产生额外空行 */
 function splitLines(s: string): string[] {
@@ -206,7 +212,7 @@ function mergeAdjacentAddedRemoved(lines: DiffLine[]): DiffLine[] {
  * @returns DiffLine[]，按行顺序排列
  */
 export function computeLineDiff(actual: string, expected: string): DiffLine[] {
-  // 复杂度保护：超阈值降级
+  // 字符总数粗筛：超阈值直接降级，避免 splitLines 本身耗时
   if (actual.length + expected.length > FALLBACK_THRESHOLD) {
     return fallbackDiff(actual, expected);
   }
@@ -219,27 +225,47 @@ export function computeLineDiff(actual: string, expected: string): DiffLine[] {
     return [];
   }
   if (leftLines.length === 0) {
-    return rightLines.map((line, idx) => ({
+    return truncateDiff(rightLines.map((line, idx) => ({
       leftLineNo: null,
       rightLineNo: idx + 1,
       leftContent: "",
       rightContent: line,
       type: "added" as const,
-    }));
+    })));
   }
   if (rightLines.length === 0) {
-    return leftLines.map((line, idx) => ({
+    return truncateDiff(leftLines.map((line, idx) => ({
       leftLineNo: idx + 1,
       rightLineNo: null,
       leftContent: line,
       rightContent: "",
       type: "removed" as const,
-    }));
+    })));
+  }
+
+  // 行数乘积判断：矩阵 (m+1)×(n+1)，乘积过大时降级避免 OOM
+  if (leftLines.length * rightLines.length > MAX_LINE_PRODUCT) {
+    return truncateDiff(fallbackDiff(actual, expected));
   }
 
   const dp = lcsMatrix(leftLines, rightLines);
   const raw = backtrack(dp, leftLines, rightLines);
-  return mergeAdjacentAddedRemoved(raw);
+  return truncateDiff(mergeAdjacentAddedRemoved(raw));
+}
+
+/** 展示行数上限保护：超过 MAX_DIFF_LINES 时截断并附加 truncated 提示行 */
+function truncateDiff(lines: DiffLine[]): DiffLine[] {
+  if (lines.length <= MAX_DIFF_LINES) return lines;
+  return [
+    ...lines.slice(0, MAX_DIFF_LINES),
+    {
+      leftLineNo: null,
+      rightLineNo: null,
+      leftContent: "",
+      rightContent: "",
+      type: "truncated" as const,
+    },
+  ];
 }
 
 /**
@@ -247,5 +273,5 @@ export function computeLineDiff(actual: string, expected: string): DiffLine[] {
  * 用于 Modal header 显示"N 处差异"。
  */
 export function countDiffs(lines: DiffLine[]): number {
-  return lines.filter((l) => l.type !== "equal").length;
+  return lines.filter((l) => l.type !== "equal" && l.type !== "truncated").length;
 }

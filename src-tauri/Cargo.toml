@@ -24,7 +24,6 @@ tokio-util = { version = "0.7", default-features = false }
 tempfile = "3"
 which = "6"
 uuid = { version = "1", features = ["v4"] }
-thiserror = "1"
 libc = "0.2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 walkdir = "2"

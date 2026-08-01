@@ -172,4 +172,12 @@ describe("i18n 完整性", () => {
       expect(getByPath(en, k)).toBeUndefined();
     });
   });
+
+  // P1-4: Windows JobObject 降级感知新增的 i18n key
+  describe("JobObject 降级警告 key", () => {
+    it.each(["status.jobObjectDegraded"])("zh 与 en 都包含 %s", (k) => {
+      expect(getByPath(zh, k), `zh 缺少 ${k}`).toBeTypeOf("string");
+      expect(getByPath(en, k), `en 缺少 ${k}`).toBeTypeOf("string");
+    });
+  });
 });

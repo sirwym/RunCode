@@ -30,6 +30,7 @@ export const en = {
     indentTab: "Tab: {n}",
     indentSpace: "Spaces: {n}",
     cursorPos: "Ln {line}, Col {col}",
+    jobObjectDegraded: "CPU limit inactive",
   },
   killed: {
     timeout: "Run timeout (killed)",
@@ -65,6 +66,7 @@ export const en = {
     diffDialogTitle: "Compare Diff: {name}",
     diffNormalizedHint: "Normalized: trailing newlines ignored",
     diffTruncated: "Actual output exceeded 1MB and was truncated",
+    diffLinesTruncated: "Too many diff lines, showing first 5000",
     diffLoading: "Loading expected output…",
     diffLoadFailed: "Load failed: {detail}",
     diffLegendAdded: "Expected only",
@@ -86,6 +88,10 @@ export const en = {
     importResult: "Imported {imported} case(s)",
     importResultWithSkip: "Imported {imported}, skipped {skipped}",
     importFailed: "Import failed: {detail}",
+    selectAll: "All",
+    selectAllHint: "Select all test cases",
+    deselectAllHint: "Deselect all",
+    toggleSelect: "Toggle this case",
   },
   panel: {
     tests: "Multi-Case Tests",

@@ -59,12 +59,17 @@ export const useSettings = create<SettingsState>((set, get) => ({
   },
 
   save: async (settings) => {
-    set({ saving: true, error: null });
+    // 乐观更新：先更新本地 state，再同步到后端
+    // 避免快速连续修改时，await invoke 期间读到旧 state 丢失增量
+    const prev = get().settings;
+    set({ settings, saving: true, error: null });
     try {
       await invoke("save_settings", { settings });
-      set({ settings, saving: false });
+      set({ saving: false });
     } catch (e) {
+      // 回滚到之前的值
       set({
+        settings: prev,
         saving: false,
         error: typeof e === "string" ? e : String(e),
       });

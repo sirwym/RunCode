@@ -403,7 +403,6 @@ dependencies = [
  "tauri-plugin-decoration",
  "tauri-plugin-dialog",
  "tempfile",
- "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tree-sitter",

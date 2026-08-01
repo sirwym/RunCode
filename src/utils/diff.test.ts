@@ -126,10 +126,10 @@ describe("computeLineDiff", () => {
     expect(lines[3]).toMatchObject({ leftLineNo: 2, rightLineNo: 4 });
   });
 
-  it("降级：超过 5MB 阈值使用 fallbackDiff（按行号对齐）", () => {
-    // 构造 3MB + 3MB = 6MB 总量
-    const big = "x".repeat(3 * 1024 * 1024);
-    const big2 = "y".repeat(3 * 1024 * 1024);
+  it("降级：超过 10MB 字符阈值使用 fallbackDiff（按行号对齐）", () => {
+    // 构造 6MB + 6MB = 12MB 总量 > 10MB 阈值
+    const big = "x".repeat(6 * 1024 * 1024);
+    const big2 = "y".repeat(6 * 1024 * 1024);
     const start = performance.now();
     const lines = computeLineDiff(big, big2);
     const elapsed = performance.now() - start;
@@ -140,17 +140,31 @@ describe("computeLineDiff", () => {
     expect(elapsed).toBeLessThan(500);
   });
 
-  it("降级：超阈值但一侧更长 → 超出部分标 removed/added", () => {
-    // aBig 4M + bSmall 2M = 6M > 5M，触发降级
-    const aBig = "x\n".repeat(2_000_000); // 4M, 200 万行
-    const bSmall = "y".repeat(2_000_000); // 2M 单行
-    const lines = computeLineDiff(aBig, bSmall);
-    // 降级后：a 有 200 万行，b 有 1 行，max=200万
-    // 第 1 行：a="x" b="y" → modified
-    // 第 2-200万行：a="x" b=undefined → removed
-    expect(lines[0].type).toBe("modified");
-    expect(lines[1].type).toBe("removed");
-    expect(lines.length).toBe(2_000_000);
+  it("降级：行数乘积超阈值走 fallbackDiff", () => {
+    // 6000 行 × 6000 行 = 36M > 25M 阈值，走 fallback
+    // 但字符总数 < 10M，不会在字符粗筛阶段降级
+    const left = Array.from({ length: 6000 }, (_, i) => `l${i}`).join("\n");
+    const right = Array.from({ length: 6000 }, (_, i) => `r${i}`).join("\n");
+    const lines = computeLineDiff(left, right);
+    // fallback 按行号对齐：前 5000 行全部 modified（末尾为 truncated 提示行）
+    expect(lines.slice(0, 5000).every((l) => l.type === "modified")).toBe(true);
+    // 6000 行 > 5000 上限，应截断为 5000 + 1 truncated
+    expect(lines.length).toBe(5001);
+    expect(lines[5000].type).toBe("truncated");
+  });
+
+  it("截断：差异行数超过 5000 时截断并附加 truncated 行", () => {
+    // 构造 6000 行全部不同（行数乘积 6000*1 < 25M，不走 fallback）
+    const left = Array.from({ length: 6000 }, (_, i) => `l${i}`).join("\n");
+    const right = "single";
+    const lines = computeLineDiff(left, right);
+    // Myers 回溯从尾部开始：added(single) 先 push，reverse 后在末尾，
+    // 与末尾 removed 合并成 modified。因此前 5999 行 removed，最后 1 行 modified。
+    // 截断后保留前 5000 行（均为 removed）+ 1 truncated
+    expect(lines.length).toBe(5001);
+    expect(lines[5000].type).toBe("truncated");
+    expect(lines[0].type).toBe("removed");
+    expect(lines[4999].type).toBe("removed");
   });
 });
 
@@ -168,5 +182,13 @@ describe("countDiffs", () => {
     const lines = computeLineDiff("a\nb\nc", "a\nX\nc\nD");
     // equal modified equal added → 2 处差异
     expect(countDiffs(lines)).toBe(2);
+  });
+
+  it("truncated 行不计入差异数", () => {
+    // 构造 6000 行差异，截断后 5000 行 + 1 truncated
+    const left = Array.from({ length: 6000 }, (_, i) => `l${i}`).join("\n");
+    const lines = computeLineDiff(left, "single");
+    // 截断行不应计入差异数
+    expect(countDiffs(lines)).toBe(5000);
   });
 });

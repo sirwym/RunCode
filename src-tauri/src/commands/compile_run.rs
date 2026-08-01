@@ -44,6 +44,8 @@ pub struct RunResult {
     pub stage: RunStage,
     /// 运行阶段内存峰值（KB）。编译失败时为 0
     pub max_rss_kb: u64,
+    /// Windows JobObject 降级标志（CPU 时间限制未生效）。编译失败时为 false
+    pub job_object_degraded: bool,
 }
 
 /// 编译结果（供 compile_and_run 和 PTY 复用）
@@ -230,6 +232,7 @@ async fn run_compile_and_run_inner(
                 truncated: false,
                 stage: RunStage::CompileFailed,
                 max_rss_kb: 0,
+                job_object_degraded: false,
             });
         }
     };
@@ -257,6 +260,7 @@ async fn run_compile_and_run_inner(
         truncated: run_out.truncated,
         stage: RunStage::Ran,
         max_rss_kb: run_out.max_rss_kb,
+        job_object_degraded: run_out.job_object_degraded,
     })
 }
 

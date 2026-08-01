@@ -319,3 +319,71 @@ describe("StatusBar killed_by 显示", () => {
     expect(screen.getByText("已取消")).toBeInTheDocument();
   });
 });
+
+describe("StatusBar JobObject 降级警告", () => {
+  beforeEach(() => {
+    resetStores(makeSettings(), "done");
+  });
+
+  it("RunResult job_object_degraded=true 显示降级警告（普通运行场景）", () => {
+    useRunManager.setState({
+      runResult: {
+        run_id: "r1",
+        success: true,
+        stdout: "",
+        stderr: "",
+        exit_code: 0,
+        duration_ms: 100,
+        killed_by: null,
+        truncated: false,
+        stage: "ran",
+        max_rss_kb: 0,
+        job_object_degraded: true,
+      } as never,
+      testResult: null,
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    expect(screen.getByText("CPU 限制未生效")).toBeInTheDocument();
+  });
+
+  it("TestRunResult job_object_degraded=true 显示降级警告（多样例测试场景）", () => {
+    useRunManager.setState({
+      runResult: null,
+      testResult: {
+        run_id: "t1",
+        success: true,
+        total: 3,
+        passed: 3,
+        stage: "ran",
+        compile_stdout: "",
+        compile_stderr: "",
+        used_opt_level: "O2",
+        results: [],
+        job_object_degraded: true,
+      } as never,
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    expect(screen.getByText("CPU 限制未生效")).toBeInTheDocument();
+  });
+
+  it("两者都未降级时不显示降级警告", () => {
+    useRunManager.setState({
+      runResult: {
+        run_id: "r1",
+        success: true,
+        stdout: "",
+        stderr: "",
+        exit_code: 0,
+        duration_ms: 100,
+        killed_by: null,
+        truncated: false,
+        stage: "ran",
+        max_rss_kb: 0,
+        job_object_degraded: false,
+      } as never,
+      testResult: null,
+    });
+    render(<StatusBar onRun={() => {}} onFormat={() => {}} cursorLine={1} cursorColumn={1} />);
+    expect(screen.queryByText("CPU 限制未生效")).toBeNull();
+  });
+});

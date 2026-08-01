@@ -890,6 +890,39 @@ body::before {
   line-height: 1;
 }
 
+/* 全选 toggle：复用 .strict-toggle 基础样式，active 用品牌色（区别于"严格"的 warning 色） */
+.select-all-toggle.active {
+  color: var(--primary);
+  border-color: var(--primary-border);
+  background-color: var(--primary-soft);
+}
+
+.select-all-toggle.active input {
+  accent-color: var(--primary);
+}
+
+/* 卡片头部选中 checkbox（紧凑，无 label） */
+.testcase-select-toggle {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+  margin-right: var(--space-xs);
+}
+
+.testcase-select-toggle input {
+  margin: 0;
+  width: 12px;
+  height: 12px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+
+.testcase-select-toggle input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .testcases-error,
 .testcases-compile-error {
   margin: var(--space-sm) var(--space-lg);
@@ -1278,6 +1311,17 @@ body::before {
 .diff-line.empty-side .diff-line-content {
   color: var(--text-muted);
   opacity: 0.4;
+}
+
+.diff-line.truncated {
+  background-color: var(--bg);
+}
+
+.diff-truncated-hint {
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 11px;
+  text-align: center;
 }
 
 .diff-empty-hint {

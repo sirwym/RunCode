@@ -93,6 +93,17 @@ function DiffDialog({
             const isEmptySide =
               (side === "left" && line.type === "added") ||
               (side === "right" && line.type === "removed");
+            // truncated 行：两侧都显示截断提示
+            if (line.type === "truncated") {
+              return (
+                <div key={idx} className="diff-line truncated">
+                  <span className="diff-line-no"></span>
+                  <span className="diff-line-content diff-truncated-hint">
+                    {t("tests.diffLinesTruncated")}
+                  </span>
+                </div>
+              );
+            }
             return (
               <div
                 key={idx}

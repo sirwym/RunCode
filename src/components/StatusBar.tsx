@@ -30,6 +30,7 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
   const status = useRunManager((s) => s.status);
   const stop = useRunManager((s) => s.stop);
   const runResult = useRunManager((s) => s.runResult);
+  const testResult = useRunManager((s) => s.testResult);
   const ptyExitInfo = useRunManager((s) => s.ptyExitInfo);
   const error = useRunManager((s) => s.error);
   const settings = useSettings((s) => s.settings);
@@ -109,6 +110,14 @@ function StatusBar({ onRun, onFormat, cursorLine, cursorColumn }: StatusBarProps
       {!runResult && ptyExitInfo?.killedBy && (
         <span className="status-item status-item-low-priority">
           {t(`killed.${killedByKey(ptyExitInfo.killedBy)}`)}
+        </span>
+      )}
+
+      {/* Windows JobObject 降级警告：CPU 时间限制未生效，仅墙钟超时可用。
+          普通运行(runResult)与多样例测试(testResult)任一降级即显示。 */}
+      {(runResult?.job_object_degraded || testResult?.job_object_degraded) && (
+        <span className="status-item status-item-low-priority">
+          {t("status.jobObjectDegraded")}
         </span>
       )}
 

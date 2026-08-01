@@ -211,6 +211,8 @@ async fn start_pty_run_inner(
     // 7. 读取线程：blocking read → emit pty_output，累计 50MB 上限超限触发 kill
     // 跨线程共享"输出超限"标志：读取线程超限时 set，等待线程检测后改 emit killed_by
     let output_limit_triggered = Arc::new(AtomicBool::new(false));
+    // 注册 cancelled 标志：stop_pty_run 设置后，等待线程跳过 emit，保证 pty_exit 单次 emit
+    let cancelled_flag = pty_manager.register_cancelled_flag(&run_id);
     let app_reader = app.clone();
     let run_id_reader = run_id.clone();
     let output_limit_flag_reader = output_limit_triggered.clone();
@@ -254,6 +256,7 @@ async fn start_pty_run_inner(
     let app_waiter = app.clone();
     let run_id_waiter = run_id.clone();
     let output_limit_flag_waiter = output_limit_triggered.clone();
+    let cancelled_flag_waiter = cancelled_flag.clone();
     std::thread::spawn(move || {
         let mut child = child;
 
@@ -372,15 +375,19 @@ async fn start_pty_run_inner(
             None
         };
 
-        let _ = app_waiter.emit(
-            "pty_exit",
-            PtyExitEvent {
-                run_id: run_id_waiter.clone(),
-                exit_code,
-                killed_by,
-                max_rss_kb,
-            },
-        );
+        // 若已被 stop_pty_run 取消，跳过 emit（stop_pty_run 已 emit 过 pty_exit）
+        // 保证 pty_exit 单次 emit 语义，避免前端 onExit 被调用两次
+        if !cancelled_flag_waiter.load(Ordering::Relaxed) {
+            let _ = app_waiter.emit(
+                "pty_exit",
+                PtyExitEvent {
+                    run_id: run_id_waiter.clone(),
+                    exit_code,
+                    killed_by,
+                    max_rss_kb,
+                },
+            );
+        }
 
         // 清理 RunManager + PtyManager（通过 AppHandle 获取 State）
         if let Some(rm) = app_waiter.try_state::<RunManager>() {
@@ -441,11 +448,13 @@ pub async fn stop_pty_run(
     pty_manager.kill(&run_id);
     // 2. cancel RunManager 会话
     let cancelled = run_manager.cancel(&run_id);
-    // 3. 清理（等待线程也会清理，但这里是幂等的）
+    // 3. 标记 cancelled：等待线程检测到此标志后跳过 emit，保证 pty_exit 单次 emit
+    pty_manager.mark_cancelled(&run_id);
+    // 4. 清理（等待线程也会清理，但这里是幂等的）
     run_manager.complete(&run_id);
     pty_manager.remove(&run_id);
 
-    // 4. 通知前端 PTY 已退出（用户取消时不查内存，max_rss_kb=0）
+    // 5. 通知前端 PTY 已退出（用户取消时不查内存，max_rss_kb=0）
     let _ = app.emit(
         "pty_exit",
         PtyExitEvent {

@@ -186,3 +186,129 @@ describe("useSettings themePreview 临时主题预览状态", () => {
     expect(useSettings.getState().saving).toBe(false);
   });
 });
+
+describe("useSettings save 乐观更新与回滚", () => {
+  function makeSettings(font_size: number): AppSettings {
+    return {
+      compiler: {
+        cpp_standard: "c++17",
+        opt_level: "O0",
+        warnings: "wall",
+        extra_args: "",
+        compiler_path: null,
+        template: "",
+      },
+      runtime: { compile_timeout_secs: 10, run_timeout_secs: 5, cpu_secs: 5, fsize_mb: 64 },
+      general: { locale: "zh", theme: "dark", layout: "horizontal", auto_hide_panel: false },
+      test: { fsize_mb: 10, test_time_limit_ms: 1000, opt_level: "O2" },
+      editor: {
+        font_size,
+        theme: "vs-dark",
+        terminal_font_size: 14,
+        indent_style: "space",
+        indent_size: 4,
+        line_numbers: "on",
+        enable_suggestions: true,
+        auto_closing_brackets: true,
+        auto_closing_quotes: true,
+        word_wrap: "off",
+        minimap_enabled: false,
+      },
+      current_language: "cpp",
+      schema_version: 3,
+    };
+  }
+
+  beforeEach(() => {
+    useSettings.setState({
+      settings: null,
+      loading: false,
+      saving: false,
+      error: null,
+      themePreview: null,
+    });
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(undefined);
+  });
+
+  it("乐观更新：save 调用后 settings 立即更新（不等 invoke resolve）", async () => {
+    const initial = makeSettings(14);
+    const next = makeSettings(16);
+    useSettings.setState({ settings: initial });
+
+    // invoke 不立即 resolve（用未 settle 的 Promise）
+    invokeMock.mockReturnValue(new Promise(() => {}));
+
+    // 调用 save，不 await
+    const savePromise = useSettings.getState().save(next);
+
+    // invoke 还在 pending，但 settings 已经更新
+    expect(useSettings.getState().settings).toEqual(next);
+    expect(useSettings.getState().saving).toBe(true);
+
+    // 清理：让 promise settle（避免 unhandled rejection）
+    invokeMock.mockResolvedValue(undefined);
+    // 重新调用需要等原 promise，这里直接验证状态后不等待
+    // 标记为已处理避免警告
+    savePromise.catch(() => {});
+  });
+
+  it("成功后 saving 变 false，settings 保持新值", async () => {
+    const initial = makeSettings(14);
+    const next = makeSettings(20);
+    useSettings.setState({ settings: initial });
+
+    await useSettings.getState().save(next);
+
+    expect(useSettings.getState().settings).toEqual(next);
+    expect(useSettings.getState().saving).toBe(false);
+    expect(useSettings.getState().error).toBeNull();
+  });
+
+  it("失败时回滚到之前的值", async () => {
+    const initial = makeSettings(14);
+    const next = makeSettings(20);
+    useSettings.setState({ settings: initial });
+
+    invokeMock.mockRejectedValueOnce(new Error("磁盘满"));
+
+    await expect(useSettings.getState().save(next)).rejects.toThrow("磁盘满");
+
+    // settings 回滚到初始值
+    expect(useSettings.getState().settings).toEqual(initial);
+    expect(useSettings.getState().saving).toBe(false);
+    // String(new Error("磁盘满")) === "Error: 磁盘满"
+    expect(useSettings.getState().error).toBe("Error: 磁盘满");
+  });
+
+  it("快速连续修改不丢失增量（乐观更新解决竞态）", async () => {
+    const s1 = makeSettings(14);
+    const s2 = makeSettings(16);
+    const s3 = makeSettings(18);
+    useSettings.setState({ settings: s1 });
+
+    // 模拟快速连续 save：第一次慢，第二次快
+    let resolveFirst: () => void = () => {};
+    const firstInvoke = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    invokeMock.mockReturnValueOnce(firstInvoke);
+    invokeMock.mockResolvedValueOnce(undefined);
+
+    const p1 = useSettings.getState().save(s2);
+    // s2 已乐观更新到 state
+    expect(useSettings.getState().settings).toEqual(s2);
+
+    const p2 = useSettings.getState().save(s3);
+    // s3 已乐观更新到 state（覆盖了 s2）
+    expect(useSettings.getState().settings).toEqual(s3);
+
+    // 第一次 invoke resolve（慢）
+    resolveFirst();
+    await Promise.all([p1, p2]);
+
+    // 最终 state 是 s3，不丢失
+    expect(useSettings.getState().settings).toEqual(s3);
+    expect(useSettings.getState().saving).toBe(false);
+  });
+});

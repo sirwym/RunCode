@@ -8,7 +8,17 @@ use crate::commands::compile_run::{compile_only, load_config, CompileScenario, R
 use crate::error::AppError;
 use crate::run_manager::{RunKind, RunManager};
 use crate::runner::{run_with_limits, KillReason, ResourceLimits};
-use crate::test_suite::TestSuite;
+use crate::test_suite::{CaseMeta, TestSuite};
+
+/// 过滤用例清单（纯函数，便于单测）。
+/// - `case_ids = None`：返回全部用例引用
+/// - `case_ids = Some(ids)`：只保留 ids 中命中的用例，保持 manifest 原顺序
+fn filter_cases<'a>(cases: &'a [CaseMeta], case_ids: Option<&[String]>) -> Vec<&'a CaseMeta> {
+    cases
+        .iter()
+        .filter(|c| case_ids.map_or(true, |ids| ids.iter().any(|id| id == &c.id)))
+        .collect()
+}
 
 /// 单个测试用例的运行结果
 #[derive(Serialize, Clone)]
@@ -40,6 +50,8 @@ pub struct TestRunResult {
     /// 本次测试编译实际使用的优化级别（运行开始时快照）
     pub used_opt_level: String,
     pub results: Vec<TestCaseResult>,
+    /// 本次测试是否发生 JobObject 降级（任意一例降级则为 true）
+    pub job_object_degraded: bool,
 }
 
 /// 逐例进度事件
@@ -138,6 +150,7 @@ pub async fn run_tests(
     code: String,
     suite_id: String,
     strict: Option<bool>,
+    case_ids: Option<Vec<String>>,
     run_id: String,
     app: AppHandle,
     manager: State<'_, RunManager>,
@@ -174,6 +187,7 @@ pub async fn run_tests(
         &code,
         &suite_id,
         strict,
+        case_ids.as_deref(),
         &base,
         run_id.clone(),
         cancel_token,
@@ -202,6 +216,7 @@ async fn run_tests_inner(
     code: &str,
     suite_id: &str,
     strict: bool,
+    case_ids: Option<&[String]>,
     base: &Path,
     run_id: String,
     cancel_token: CancellationToken,
@@ -231,7 +246,7 @@ async fn run_tests_inner(
             stderr,
             exit_code: _,
         } => {
-            // 加载套件清单获取用例数量
+            // 加载套件清单并按 case_ids 过滤，保证 total 与运行分支一致
             let manifest = TestSuite::load(base, suite_id).unwrap_or_else(|_| {
                 // 加载失败也返回编译错误结果
                 crate::test_suite::TestSuiteManifest {
@@ -242,28 +257,32 @@ async fn run_tests_inner(
                     schema_version: 2,
                 }
             });
+            let filtered = filter_cases(&manifest.cases, case_ids);
             return Ok(TestRunResult {
                 run_id,
                 success: false,
-                total: manifest.cases.len(),
+                total: filtered.len(),
                 passed: 0,
                 stage: RunStage::CompileFailed,
                 compile_stdout: stdout,
                 compile_stderr: stderr,
                 used_opt_level: config.test_opt_level.clone(),
                 results: vec![],
+                job_object_degraded: false,
             });
         }
     };
 
-    // 加载套件清单
+    // 加载套件清单并按 case_ids 过滤
     let manifest = TestSuite::load(base, suite_id)?;
-    let total = manifest.cases.len();
+    let filtered = filter_cases(&manifest.cases, case_ids);
+    let total = filtered.len();
 
     let mut results = Vec::with_capacity(total);
     let mut passed_count = 0;
+    let mut job_object_degraded = false;
 
-    for (index, case) in manifest.cases.iter().enumerate() {
+    for (index, case) in filtered.iter().enumerate() {
         // 每个用例运行前检查是否已取消（用例间取消）
         if cancel_token.is_cancelled() {
             let _ = app.emit(
@@ -382,6 +401,11 @@ async fn run_tests_inner(
             first_diff,
             max_rss_kb: run_out.max_rss_kb,
         });
+
+        // 聚合 JobObject 降级标志（任意一例降级则为 true）
+        if run_out.job_object_degraded {
+            job_object_degraded = true;
+        }
     }
 
     Ok(TestRunResult {
@@ -394,12 +418,67 @@ async fn run_tests_inner(
         compile_stderr: String::new(),
         used_opt_level: config.test_opt_level.clone(),
         results,
+        job_object_degraded,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_case(id: &str) -> CaseMeta {
+        CaseMeta {
+            id: id.to_string(),
+            name: format!("case-{id}"),
+            input_size: 0,
+            expected_size: 0,
+            strict: false,
+        }
+    }
+
+    #[test]
+    fn filter_cases_none_returns_all() {
+        let cases = vec![make_case("a"), make_case("b")];
+        let filtered = filter_cases(&cases, None);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, "a");
+        assert_eq!(filtered[1].id, "b");
+    }
+
+    #[test]
+    fn filter_cases_some_returns_matched_in_original_order() {
+        let cases = vec![make_case("a"), make_case("b"), make_case("c")];
+        // 传入逆序，结果应保持 manifest 原顺序
+        let ids = vec!["c".to_string(), "a".to_string()];
+        let filtered = filter_cases(&cases, Some(&ids));
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, "a");
+        assert_eq!(filtered[1].id, "c");
+    }
+
+    #[test]
+    fn filter_cases_empty_ids_returns_empty() {
+        let cases = vec![make_case("a")];
+        let filtered = filter_cases(&cases, Some(&[]));
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn filter_cases_unmatched_ids_returns_empty() {
+        let cases = vec![make_case("a")];
+        let ids = vec!["nonexistent".to_string()];
+        let filtered = filter_cases(&cases, Some(&ids));
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn filter_cases_duplicates_in_ids_dont_duplicate_results() {
+        let cases = vec![make_case("a"), make_case("b")];
+        let ids = vec!["a".to_string(), "a".to_string()];
+        let filtered = filter_cases(&cases, Some(&ids));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "a");
+    }
 
     #[test]
     fn normalize_default_ignores_trailing_newline() {

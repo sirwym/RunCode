@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
 
 use crate::error::AppError;
 
@@ -63,7 +64,17 @@ impl RecentFiles {
         let raw = serde_json::to_string_pretty(entries).map_err(|e| AppError::Other {
             detail: format!("序列化最近文件失败: {e}"),
         })?;
-        fs::write(Self::file_path(base), raw)?;
+        let file_path = Self::file_path(base);
+        let parent = file_path.parent().ok_or_else(|| AppError::Other {
+            detail: "无效路径".into(),
+        })?;
+        // 同目录临时文件 + persist(rename)，保证原子性
+        let tmp = NamedTempFile::new_in(parent)?;
+        fs::write(tmp.path(), &raw)?;
+        tmp.persist(&file_path)
+            .map_err(|e| AppError::Other {
+                detail: format!("持久化最近文件失败: {e}"),
+            })?;
         Ok(())
     }
 }
@@ -138,5 +149,21 @@ mod tests {
         RecentFiles::clear(tmp.path()).unwrap();
         let entries = RecentFiles::load(tmp.path()).unwrap();
         assert!(entries.is_empty());
+    }
+
+    /// 回归测试：验证 persist 原子写成功替换原文件
+    #[test]
+    fn save_persists_atomically() {
+        let tmp = TempDir::new().unwrap();
+        // 先写入旧内容
+        RecentFiles::add(tmp.path(), "/old.cpp".into(), "old.cpp".into()).unwrap();
+        // 再写入新内容（触发 persist 替换原文件）
+        RecentFiles::add(tmp.path(), "/new.cpp".into(), "new.cpp".into()).unwrap();
+        let entries = RecentFiles::load(tmp.path()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].path, "/new.cpp");
+        // 验证文件存在且可解析（persist 后状态正确）
+        let file_path = tmp.path().join("recent_files.json");
+        assert!(file_path.exists());
     }
 }

@@ -46,6 +46,10 @@ pub struct RunOutput {
     /// - Windows: GetProcessMemoryInfo 的 PeakWorkingSetSize，轮询采集
     /// 超时/取消分支未完成 wait，记为 0
     pub max_rss_kb: u64,
+    /// Windows JobObject 降级标志
+    /// - true: AssignProcessToJobObject 失败，CPU 时间限制未生效（仅墙钟超时可用）
+    /// - false: Unix 平台 / Windows 正常路径
+    pub job_object_degraded: bool,
 }
 
 /// 带资源限制、超时与取消的执行核心（平台分发）。

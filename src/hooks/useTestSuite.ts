@@ -8,6 +8,13 @@ interface TestSuiteState {
   previews: CasePreview[];
   loading: boolean;
 
+  // 选中状态：按 suiteId 缓存被取消选中的 case id 集合（per-tab 隔离）
+  // 选中 = previews.filter(p => !deselectedIds.has(p.id))
+  // 新增/导入的用例天然不在 deselectedIds 中 → 自动选中
+  deselectedBySuite: Record<string, string[]>;
+  // 当前 suite 的取消选中集合（派生自 deselectedBySuite[suiteId]）
+  deselectedIds: string[];
+
   // 按 doc_path 查找或创建套件（已保存文件）
   ensureSuiteForDocPath: (docPath: string) => Promise<string | null>;
   // 为未保存文件创建临时套件
@@ -26,8 +33,17 @@ interface TestSuiteState {
   importCases: (source: string, strict: boolean) => Promise<ImportResult>;
   // 重新加载 previews
   refresh: () => Promise<void>;
+  // 只刷新单个用例的 preview（编辑后用，避免全量重载引起竞态）
+  refreshCase: (caseId: string) => Promise<void>;
   // 获取用例完整期望输出（用于 diff Modal 按需加载）
   getFullExpected: (caseId: string) => Promise<string>;
+
+  // 选中操作
+  toggleCaseSelection: (id: string) => void;
+  selectAll: () => void;
+  deselectAll: () => void;
+  getSelectedIds: () => string[];
+  isAllSelected: () => boolean;
 }
 
 async function loadSuite(id: string): Promise<{ manifest: TestSuiteManifest; previews: CasePreview[] }> {
@@ -41,12 +57,19 @@ export const useTestSuite = create<TestSuiteState>((set, get) => ({
   manifest: null,
   previews: [],
   loading: false,
+  deselectedBySuite: {},
+  deselectedIds: [],
 
   ensureSuiteForDocPath: async (docPath) => {
     try {
       const id = await invoke<string>("find_or_create_suite_by_doc_path", { docPath });
       const { manifest, previews } = await loadSuite(id);
-      set({ suiteId: id, manifest, previews });
+      set({
+        suiteId: id,
+        manifest,
+        previews,
+        deselectedIds: get().deselectedBySuite[id] ?? [],
+      });
       return id;
     } catch (e) {
       console.error("ensureSuiteForDocPath failed:", e);
@@ -58,7 +81,12 @@ export const useTestSuite = create<TestSuiteState>((set, get) => ({
     try {
       const id = await invoke<string>("create_test_suite", { docPath: null });
       const { manifest, previews } = await loadSuite(id);
-      set({ suiteId: id, manifest, previews });
+      set({
+        suiteId: id,
+        manifest,
+        previews,
+        deselectedIds: get().deselectedBySuite[id] ?? [],
+      });
       return id;
     } catch (e) {
       console.error("ensureSuiteForUntitled failed:", e);
@@ -70,7 +98,12 @@ export const useTestSuite = create<TestSuiteState>((set, get) => ({
     set({ loading: true });
     try {
       const { manifest, previews } = await loadSuite(id);
-      set({ suiteId: id, manifest, previews });
+      set({
+        suiteId: id,
+        manifest,
+        previews,
+        deselectedIds: get().deselectedBySuite[id] ?? [],
+      });
     } catch (e) {
       console.error("setSuiteId failed:", e);
     } finally {
@@ -81,7 +114,12 @@ export const useTestSuite = create<TestSuiteState>((set, get) => ({
   createSuite: async (docPath) => {
     const id = await invoke<string>("create_test_suite", { docPath: docPath ?? null });
     const { manifest, previews } = await loadSuite(id);
-    set({ suiteId: id, manifest, previews });
+    set({
+      suiteId: id,
+      manifest,
+      previews,
+      deselectedIds: get().deselectedBySuite[id] ?? [],
+    });
   },
 
   addCase: async (name, input, expected, strict) => {
@@ -102,7 +140,8 @@ export const useTestSuite = create<TestSuiteState>((set, get) => ({
       expected: patch.expected ?? null,
       strict: patch.strict ?? null,
     });
-    await get().refresh();
+    // 单卡刷新：避免全量 refresh 引发多请求乱序覆盖
+    await get().refreshCase(id);
   },
 
   removeCase: async (id) => {
@@ -135,9 +174,62 @@ export const useTestSuite = create<TestSuiteState>((set, get) => ({
     }
   },
 
+  refreshCase: async (caseId) => {
+    const { suiteId } = get();
+    if (!suiteId) return;
+    try {
+      const preview = await invoke<CasePreview>("get_case_preview", { suiteId, caseId });
+      set((state) => ({
+        previews: state.previews.map((p) => (p.id === caseId ? preview : p)),
+      }));
+    } catch {
+      // 忽略：编辑后刷新失败不阻塞用户继续编辑
+    }
+  },
+
   getFullExpected: async (caseId) => {
     const { suiteId } = get();
     if (!suiteId) throw new Error("套件未初始化");
     return await invoke<string>("get_case_full_expected", { suiteId, caseId });
   },
+
+  toggleCaseSelection: (id) => {
+    const { deselectedIds, suiteId } = get();
+    if (!suiteId) return;
+    const s = new Set(deselectedIds);
+    if (s.has(id)) s.delete(id);
+    else s.add(id);
+    const next = Array.from(s);
+    set((state) => ({
+      deselectedIds: next,
+      deselectedBySuite: { ...state.deselectedBySuite, [suiteId]: next },
+    }));
+  },
+
+  selectAll: () => {
+    const { suiteId } = get();
+    if (!suiteId) return;
+    set((state) => ({
+      deselectedIds: [],
+      deselectedBySuite: { ...state.deselectedBySuite, [suiteId]: [] },
+    }));
+  },
+
+  deselectAll: () => {
+    const { suiteId, previews } = get();
+    if (!suiteId) return;
+    const next = previews.map((p) => p.id);
+    set((state) => ({
+      deselectedIds: next,
+      deselectedBySuite: { ...state.deselectedBySuite, [suiteId]: next },
+    }));
+  },
+
+  getSelectedIds: () => {
+    const { previews, deselectedIds } = get();
+    const s = new Set(deselectedIds);
+    return previews.filter((p) => !s.has(p.id)).map((p) => p.id);
+  },
+
+  isAllSelected: () => get().deselectedIds.length === 0,
 }));

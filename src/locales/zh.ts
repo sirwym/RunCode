@@ -30,6 +30,7 @@ export const zh = {
     indentTab: "Tab: {n}",
     indentSpace: "空格: {n}",
     cursorPos: "行 {line}, 列 {col}",
+    jobObjectDegraded: "CPU 限制未生效",
   },
   killed: {
     timeout: "运行超时（已终止）",
@@ -65,6 +66,7 @@ export const zh = {
     diffDialogTitle: "对比差异：{name}",
     diffNormalizedHint: "已标准化，忽略末尾换行差异",
     diffTruncated: "实际输出超过 1MB，已截断",
+    diffLinesTruncated: "差异行数过多，仅展示前 5000 行",
     diffLoading: "加载期望输出中…",
     diffLoadFailed: "加载失败：{detail}",
     diffLegendAdded: "期望独有",
@@ -86,6 +88,10 @@ export const zh = {
     importResult: "已导入 {imported} 条用例",
     importResultWithSkip: "已导入 {imported} 条，跳过 {skipped} 条",
     importFailed: "导入失败：{detail}",
+    selectAll: "全选",
+    selectAllHint: "全选所有测试点",
+    deselectAllHint: "取消全选",
+    toggleSelect: "选中此测试点",
   },
   panel: {
     tests: "多样例测试",

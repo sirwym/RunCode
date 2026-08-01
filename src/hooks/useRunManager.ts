@@ -76,7 +76,7 @@ interface RunManagerState {
 
   // 操作
   compileRun: (code: string, stdin?: string) => Promise<void>;
-  runTests: (code: string, suiteId: string, strict: boolean) => Promise<void>;
+  runTests: (code: string, suiteId: string, strict: boolean, caseIds?: string[] | null) => Promise<void>;
   startInteractive: (code: string) => Promise<void>;
   stopInteractive: () => Promise<void>;
   onPtyExit: (info: Omit<PtyExitInfo, "durationMs" | "maxRssKb">, maxRssKb: number | null) => void;
@@ -197,7 +197,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
     }
   },
 
-  runTests: async (code, suiteId, strict) => {
+  runTests: async (code, suiteId, strict, caseIds) => {
     if (get().activeRunId) return;
     const initiatorTabId = get().activeTabId;
     // 前端生成 runId，invoke 前立即设置 activeRunId 让停止按钮可用
@@ -231,7 +231,13 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
     }
 
     try {
-      const result = await invoke<TestRunResult>("run_tests", { code, suiteId, strict, runId });
+      const result = await invoke<TestRunResult>("run_tests", {
+        code,
+        suiteId,
+        strict,
+        caseIds: caseIds ?? null,
+        runId,
+      });
       set((s) => {
         // 守卫：已被 stop 或被新任务替换，丢弃结果
         if (s.activeRunId !== runId) return s;
@@ -291,10 +297,14 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   startInteractive: async (code) => {
     if (get().activeRunId) return;
     const initiatorTabId = get().activeTabId;
-    // 前端预生成 runId，invoke 前设置 activeRunId，让编译期停止按钮可用
+    // 前端预生成 runId，invoke 前设置 activeRunId + ptyRunId：
+    // - activeRunId 让编译期停止按钮可用
+    // - ptyRunId 提前设置让 Terminal 在 invoke 前就注册 pty_output/pty_exit 监听器，
+    //   避免立即退出的程序（如 echo hi）事件在监听器注册前发完导致丢失
     const runId = crypto.randomUUID();
     set({
       activeRunId: runId,
+      ptyRunId: runId,
       status: "running",
       error: null,
       kind: "interactive",

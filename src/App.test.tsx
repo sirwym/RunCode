@@ -1165,7 +1165,7 @@ describe("运行快捷键（App keydown 链路）", () => {
     fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, shiftKey: true });
 
     expect(useRunManager.getState().runTests).toHaveBeenCalledTimes(1);
-    expect(useRunManager.getState().runTests).toHaveBeenCalledWith("int main(){}", "suite1", false);
+    expect(useRunManager.getState().runTests).toHaveBeenCalledWith("int main(){}", "suite1", false, []);
     expect(useRunManager.getState().startInteractive).not.toHaveBeenCalled();
   });
 
@@ -1190,7 +1190,7 @@ describe("运行快捷键（App keydown 链路）", () => {
     fireEvent.keyDown(window, { key: "Enter", ctrlKey: true, shiftKey: true });
 
     expect(useRunManager.getState().runTests).toHaveBeenCalledTimes(1);
-    expect(useRunManager.getState().runTests).toHaveBeenCalledWith("int main(){}", "suite1", false);
+    expect(useRunManager.getState().runTests).toHaveBeenCalledWith("int main(){}", "suite1", false, []);
   });
 
   it("测试标签按钮焦点（tab=tests 时 .right-panel 内）Ctrl+Enter → 终端运行", async () => {

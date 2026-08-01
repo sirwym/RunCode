@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useTestSuite } from "../hooks/useTestSuite";
 import { useRunManager } from "../hooks/useRunManager";
@@ -27,6 +27,9 @@ interface CardProps {
   preview: CasePreview;
   result: TestCaseResult | undefined;
   isCurrent: boolean; // 是否为当前正在运行的用例
+  selected: boolean; // 是否选中参与多样例测试
+  onToggleSelected: () => void;
+  selectionDisabled: boolean; // 运行中禁用选中切换
   onUpdate: (patch: { name?: string; input?: string; expected?: string; strict?: boolean }) => void;
   onRemove: () => void;
   onCompare: () => void;
@@ -37,12 +40,79 @@ function TestCaseCard({
   preview,
   result,
   isCurrent,
+  selected,
+  onToggleSelected,
+  selectionDisabled,
   onUpdate,
   onRemove,
   onCompare,
 }: CardProps) {
   const t = useI18n((s) => s.t);
   const isLarge = preview.is_large;
+
+  // 本地编辑 state：避免每次 onChange 都触发 invoke + refresh 导致竞态
+  // （连续编辑时多个 refresh 请求乱序完成，旧请求会覆盖新内容）
+  // 策略：onChange 只改本地 state；500ms 防抖后或 onBlur 时才触发 onUpdate
+  const [localName, setLocalName] = useState(preview.name);
+  const [localInput, setLocalInput] = useState(preview.input_preview);
+  const [localExpected, setLocalExpected] = useState(preview.expected_preview);
+
+  // 防抖 timer + 待提交 patch
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef<{ name?: string; input?: string; expected?: string }>({});
+
+  // 组件卸载时清理 timer 并 flush 未提交编辑，避免切换 tab 丢数据
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      const patch = pendingRef.current;
+      pendingRef.current = {};
+      if (Object.keys(patch).length > 0) {
+        onUpdate(patch);
+      }
+    };
+  }, [onUpdate]);
+
+  // 防抖提交：500ms 内无新输入才触发 onUpdate
+  const scheduleUpdate = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const patch = pendingRef.current;
+      pendingRef.current = {};
+      if (Object.keys(patch).length > 0) {
+        onUpdate(patch);
+      }
+    }, 500);
+  }, [onUpdate]);
+
+  // blur 时立即提交（不等防抖），保证切走焦点后后端尽快同步
+  const flushUpdate = useCallback(() => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    const patch = pendingRef.current;
+    pendingRef.current = {};
+    if (Object.keys(patch).length > 0) {
+      onUpdate(patch);
+    }
+  }, [onUpdate]);
+
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setLocalName(e.target.value);
+    pendingRef.current.name = e.target.value;
+    scheduleUpdate();
+  };
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setLocalInput(e.target.value);
+    pendingRef.current.input = e.target.value;
+    scheduleUpdate();
+  };
+  const handleExpectedChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setLocalExpected(e.target.value);
+    pendingRef.current.expected = e.target.value;
+    scheduleUpdate();
+  };
 
   const diffPos = result?.first_diff ?? null;
 
@@ -59,11 +129,20 @@ function TestCaseCard({
       }
     >
       <div className="testcase-card-header">
+        <label className="testcase-select-toggle" title={t("tests.toggleSelect")}>
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelected}
+            disabled={selectionDisabled}
+          />
+        </label>
         <span className="testcase-index">#{index + 1}</span>
         <input
           className="testcase-name-input"
-          value={preview.name}
-          onChange={(e) => onUpdate({ name: e.target.value })}
+          value={localName}
+          onChange={handleNameChange}
+          onBlur={flushUpdate}
           disabled={isLarge}
           placeholder={t("tests.namePlaceholder")}
         />
@@ -98,8 +177,9 @@ function TestCaseCard({
           ) : (
             <textarea
               className="field-textarea"
-              value={preview.input_preview}
-              onChange={(e) => onUpdate({ input: e.target.value })}
+              value={localInput}
+              onChange={handleInputChange}
+              onBlur={flushUpdate}
               placeholder={t("tests.inputPlaceholder")}
               spellCheck={false}
             />
@@ -119,8 +199,9 @@ function TestCaseCard({
           ) : (
             <textarea
               className="field-textarea"
-              value={preview.expected_preview}
-              onChange={(e) => onUpdate({ expected: e.target.value })}
+              value={localExpected}
+              onChange={handleExpectedChange}
+              onBlur={flushUpdate}
               placeholder={t("tests.expectedPlaceholder")}
               spellCheck={false}
             />
@@ -188,6 +269,10 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
   const updateCase = useTestSuite((s) => s.updateCase);
   const removeCase = useTestSuite((s) => s.removeCase);
   const importCases = useTestSuite((s) => s.importCases);
+  const deselectedIds = useTestSuite((s) => s.deselectedIds);
+  const toggleCaseSelection = useTestSuite((s) => s.toggleCaseSelection);
+  const selectAll = useTestSuite((s) => s.selectAll);
+  const deselectAll = useTestSuite((s) => s.deselectAll);
 
   const status = useRunManager((s) => s.status);
   const result = useRunManager((s) => s.testResult);
@@ -237,6 +322,14 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
 
   const isRunning = status === "running";
   const hasCases = previews.length > 0;
+  // 选中状态派生：反向集合，deselectedIds 为空即全选
+  const deselectedSet = useMemo(() => new Set(deselectedIds), [deselectedIds]);
+  const isAllSelected = deselectedIds.length === 0;
+  const selectedCount = previews.length - deselectedIds.length;
+  const handleToggleAll = () => {
+    if (isAllSelected) deselectAll();
+    else selectAll();
+  };
 
   // 当前进度
   const progressInfo = useMemo(() => {
@@ -314,6 +407,18 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
         )}
         <span className="testcases-spacer" />
         <label
+          className={"strict-toggle select-all-toggle" + (isAllSelected ? " active" : "")}
+          title={isAllSelected ? t("tests.deselectAllHint") : t("tests.selectAllHint")}
+        >
+          <input
+            type="checkbox"
+            checked={isAllSelected}
+            onChange={handleToggleAll}
+            disabled={isRunning || !hasCases}
+          />
+          <span className="strict-toggle-label">{t("tests.selectAll")}</span>
+        </label>
+        <label
           className={"strict-toggle" + (strict ? " active" : "")}
           title={strict ? t("tests.strictHint") : t("tests.looseHint")}
         >
@@ -366,7 +471,7 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
           <button
             className="btn btn-primary btn-sm btn-icon-only"
             onClick={onRunTests}
-            disabled={!hasCases}
+            disabled={!hasCases || selectedCount === 0}
             title={t("tests.run")}
           >
             <Play size={14} />
@@ -417,6 +522,9 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
                 testProgress?.status === "running" &&
                 testProgress.case_id === pv.id
               }
+              selected={!deselectedSet.has(pv.id)}
+              onToggleSelected={() => toggleCaseSelection(pv.id)}
+              selectionDisabled={isRunning}
               onUpdate={(patch) => updateCase(pv.id, patch)}
               onRemove={() => removeCase(pv.id)}
               onCompare={() => void handleCompare(pv.id, pv.name)}

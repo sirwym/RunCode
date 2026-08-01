@@ -324,16 +324,26 @@ pub async fn run_with_limits(
     };
 
     // 等输出读取任务结束
-    let (stdout_bytes, stdout_trunc) = stdout_task
-        .await
-        .map_err(|e| AppError::Other {
-            detail: format!("stdout 读取任务失败: {e}"),
-        })??;
-    let (stderr_bytes, stderr_trunc) = stderr_task
-        .await
-        .map_err(|e| AppError::Other {
-            detail: format!("stderr 读取任务失败: {e}"),
-        })??;
+    // 超时保护：进程被杀后其子进程可能仍持有管道句柄，导致 task 无法读到 EOF，
+    // 对齐 Windows 实现的 500ms 超时
+    let (stdout_bytes, stdout_trunc) = match tokio::time::timeout(
+        Duration::from_millis(500),
+        stdout_task,
+    )
+    .await
+    {
+        Ok(Ok(r)) => r?,
+        _ => (Vec::new(), false),
+    };
+    let (stderr_bytes, stderr_trunc) = match tokio::time::timeout(
+        Duration::from_millis(500),
+        stderr_task,
+    )
+    .await
+    {
+        Ok(Ok(r)) => r?,
+        _ => (Vec::new(), false),
+    };
 
     // 解析退出码与被信号杀死的情况
     let exit_code = match exit_status_result {
@@ -360,6 +370,7 @@ pub async fn run_with_limits(
         killed_by,
         truncated: stdout_trunc || stderr_trunc,
         max_rss_kb,
+        job_object_degraded: false,
     })
 }
 

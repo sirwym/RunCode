@@ -125,6 +125,7 @@ impl TestSuite {
 
     /// 加载套件清单
     pub fn load(base: &Path, suite_id: &str) -> Result<TestSuiteManifest, AppError> {
+        Self::validate_suite_id(suite_id)?;
         let path = Self::manifest_path(base, suite_id);
         let raw = fs::read_to_string(&path).map_err(|e| AppError::Other {
             detail: format!("读取套件失败: {e}"),
@@ -174,6 +175,7 @@ impl TestSuite {
         expected: &[u8],
         strict: bool,
     ) -> Result<CaseMeta, AppError> {
+        Self::validate_suite_id(suite_id)?;
         Self::check_limits(base, suite_id, input.len() as u64, expected.len() as u64)?;
 
         let case_id = format!("tc_{}", Uuid::new_v4().simple());
@@ -208,6 +210,7 @@ impl TestSuite {
         suite_id: &str,
         cases: Vec<(String, Vec<u8>, Vec<u8>, bool)>,
     ) -> Result<(usize, Vec<String>), AppError> {
+        Self::validate_suite_id(suite_id)?;
         // 1. 一次性 load 清单
         let mut manifest = Self::load(base, suite_id)?;
         // 2. 计算现有总量
@@ -266,6 +269,10 @@ impl TestSuite {
     }
 
     /// 更新用例（inline 数据）。检查单文件 + 总量上限。
+    ///
+    /// 注意：必须先做所有大小检查再写入文件，避免部分成功部分失败导致
+    /// 磁盘内容与清单不一致。总量计算基于「现有总量 - 旧 input - 旧 expected
+    /// + 新 input + 新 expected」。
     pub fn update_case(
         base: &Path,
         suite_id: &str,
@@ -275,31 +282,75 @@ impl TestSuite {
         expected: Option<String>,
         strict: Option<bool>,
     ) -> Result<CaseMeta, AppError> {
+        Self::validate_suite_id(suite_id)?;
+        Self::validate_case_id(case_id)?;
         let mut manifest = Self::load(base, suite_id)?;
-        let meta = manifest
+
+        // 用索引定位用例，避免可变借用与后续不可变借用冲突
+        let meta_idx = manifest
             .cases
-            .iter_mut()
-            .find(|c| c.id == case_id)
+            .iter()
+            .position(|c| c.id == case_id)
             .ok_or_else(|| AppError::Other {
                 detail: "用例不存在".into(),
             })?;
 
+        // 读取旧的 input/expected 大小（用于总量计算）
+        let (old_input_size, old_expected_size) = {
+            let meta = &manifest.cases[meta_idx];
+            (meta.input_size, meta.expected_size)
+        };
+
+        // 阶段 1：单文件大小检查（先做所有检查，再写入）
+        if let Some(s) = &input {
+            Self::check_single_file(s.len() as u64)?;
+        }
+        if let Some(s) = &expected {
+            Self::check_single_file(s.len() as u64)?;
+        }
+
+        // 阶段 2：总量检查
+        // 新总量 = 现有总量 - 当前用例旧 input - 旧 expected + 新 input + 新 expected
+        let current_total: u64 = manifest
+            .cases
+            .iter()
+            .map(|c| c.input_size + c.expected_size)
+            .sum();
+        let new_input_size = input
+            .as_ref()
+            .map(|s| s.len() as u64)
+            .unwrap_or(old_input_size);
+        let new_expected_size = expected
+            .as_ref()
+            .map(|s| s.len() as u64)
+            .unwrap_or(old_expected_size);
+        let new_total =
+            current_total - old_input_size - old_expected_size + new_input_size + new_expected_size;
+        if new_total > MAX_TOTAL_BYTES {
+            return Err(AppError::Other {
+                detail: format!(
+                    "整批超限: {} bytes > {} bytes (200MB)",
+                    new_total, MAX_TOTAL_BYTES
+                ),
+            });
+        }
+
+        // 阶段 3：所有检查通过，开始写入文件 + 更新清单
+        let meta = &mut manifest.cases[meta_idx];
+        // name / strict 不影响大小，直接更新
         if let Some(n) = name {
             meta.name = n;
         }
         if let Some(s) = strict {
             meta.strict = s;
         }
-
         if let Some(input) = input {
             let input_bytes = input.as_bytes();
-            Self::check_single_file(input_bytes.len() as u64)?;
             fs::write(Self::case_input_path(base, suite_id, case_id), input_bytes)?;
             meta.input_size = input_bytes.len() as u64;
         }
         if let Some(expected) = expected {
             let expected_bytes = expected.as_bytes();
-            Self::check_single_file(expected_bytes.len() as u64)?;
             fs::write(
                 Self::case_expected_path(base, suite_id, case_id),
                 expected_bytes,
@@ -315,6 +366,8 @@ impl TestSuite {
 
     /// 删除用例
     pub fn remove_case(base: &Path, suite_id: &str, case_id: &str) -> Result<(), AppError> {
+        Self::validate_suite_id(suite_id)?;
+        Self::validate_case_id(case_id)?;
         let mut manifest = Self::load(base, suite_id)?;
         manifest.cases.retain(|c| c.id != case_id);
         manifest.updated_at = now_ts();
@@ -331,6 +384,8 @@ impl TestSuite {
         suite_id: &str,
         case_id: &str,
     ) -> Result<CasePreview, AppError> {
+        Self::validate_suite_id(suite_id)?;
+        Self::validate_case_id(case_id)?;
         let manifest = Self::load(base, suite_id)?;
         let meta = manifest
             .cases
@@ -361,6 +416,7 @@ impl TestSuite {
 
     /// 批量获取所有用例预览（清单只读一次，预览只读前 4KB，避免大样例全量读入）
     pub fn get_all_previews(base: &Path, suite_id: &str) -> Result<Vec<CasePreview>, AppError> {
+        Self::validate_suite_id(suite_id)?;
         let manifest = Self::load(base, suite_id)?;
         let mut previews = Vec::with_capacity(manifest.cases.len());
         for case in &manifest.cases {
@@ -383,6 +439,8 @@ impl TestSuite {
 
     /// 读取用例完整输入（运行时使用，不截断）
     pub fn read_case_input(base: &Path, suite_id: &str, case_id: &str) -> Result<Vec<u8>, AppError> {
+        Self::validate_suite_id(suite_id)?;
+        Self::validate_case_id(case_id)?;
         fs::read(Self::case_input_path(base, suite_id, case_id))
             .map_err(AppError::from)
     }
@@ -393,12 +451,15 @@ impl TestSuite {
         suite_id: &str,
         case_id: &str,
     ) -> Result<Vec<u8>, AppError> {
+        Self::validate_suite_id(suite_id)?;
+        Self::validate_case_id(case_id)?;
         fs::read(Self::case_expected_path(base, suite_id, case_id))
             .map_err(AppError::from)
     }
 
     /// 删除整个套件
     pub fn delete(base: &Path, suite_id: &str) -> Result<(), AppError> {
+        Self::validate_suite_id(suite_id)?;
         let dir = Self::suite_dir(base, suite_id);
         fs::remove_dir_all(&dir).map_err(AppError::from)
     }
@@ -411,6 +472,31 @@ impl TestSuite {
                     "单文件超限: {} bytes > {} bytes (50MB)",
                     size, MAX_SINGLE_FILE_BYTES
                 ),
+            });
+        }
+        Ok(())
+    }
+
+    /// 校验 suite_id 是否为合法 UUID（防止路径穿越）
+    /// suite_id 由 create() 用 Uuid::new_v4().to_string() 生成，标准带连字符格式
+    fn validate_suite_id(suite_id: &str) -> Result<(), AppError> {
+        if Uuid::parse_str(suite_id).is_err() {
+            return Err(AppError::Other {
+                detail: format!("非法 suite_id 格式: {suite_id}"),
+            });
+        }
+        Ok(())
+    }
+
+    /// 校验 case_id 是否为合法格式（tc_ + simple UUID，防止路径穿越）
+    /// case_id 由 add_case*() 用 format!("tc_{}", Uuid::new_v4().simple()) 生成
+    fn validate_case_id(case_id: &str) -> Result<(), AppError> {
+        let rest = case_id.strip_prefix("tc_").ok_or_else(|| AppError::Other {
+            detail: format!("非法 case_id 格式（缺少 tc_ 前缀）: {case_id}"),
+        })?;
+        if Uuid::parse_str(rest).is_err() {
+            return Err(AppError::Other {
+                detail: format!("非法 case_id 格式: {case_id}"),
             });
         }
         Ok(())
@@ -881,5 +967,252 @@ mod tests {
         let manifest = TestSuite::load(base, &suite_id).unwrap();
         assert_eq!(manifest.cases.len(), 6);
         assert_eq!(manifest.cases[5].name, "c6");
+    }
+
+    // ===== update_case 总量检查测试 =====
+
+    #[test]
+    fn update_case_respects_total_limit() {
+        // 验证 update_case 会检查总量上限：
+        // 先填满到接近 200MB，再 update 一个用例使其变大，应被拒绝。
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let suite_id = TestSuite::create(base, None).unwrap();
+
+        // 用例 A：30MB input + 30MB expected = 60MB
+        let thirty_mb = vec![b'A'; 30 * 1024 * 1024];
+        let case_a = TestSuite::add_case_from_bytes(
+            base,
+            &suite_id,
+            "a".into(),
+            &thirty_mb,
+            &thirty_mb,
+            false,
+        )
+        .unwrap();
+        // 用例 B：30MB input + 30MB expected = 60MB，总量 120MB
+        let case_b = TestSuite::add_case_from_bytes(
+            base,
+            &suite_id,
+            "b".into(),
+            &thirty_mb,
+            &thirty_mb,
+            false,
+        )
+        .unwrap();
+        // 用例 C：30MB input + 30MB expected = 60MB，总量 180MB
+        let _case_c = TestSuite::add_case_from_bytes(
+            base,
+            &suite_id,
+            "c".into(),
+            &thirty_mb,
+            &thirty_mb,
+            false,
+        )
+        .unwrap();
+
+        // 现在总量 180MB。把用例 A 的 input 从 30MB 改成 40MB：
+        // 新总量 = 180 - 30 + 40 = 190MB < 200MB，应该成功。
+        let forty_mb = vec![b'B'; 40 * 1024 * 1024];
+        let big_input = String::from_utf8_lossy(&forty_mb).into_owned();
+        TestSuite::update_case(
+            base,
+            &suite_id,
+            &case_a.id,
+            None,
+            Some(big_input),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // 现在总量 190MB。把用例 B 的 input 从 30MB 改成 50MB：
+        // 新总量 = 190 - 30 + 50 = 210MB > 200MB，应该失败。
+        let fifty_mb = vec![b'C'; 50 * 1024 * 1024];
+        let too_big_input = String::from_utf8_lossy(&fifty_mb).into_owned();
+        let result = TestSuite::update_case(
+            base,
+            &suite_id,
+            &case_b.id,
+            None,
+            Some(too_big_input),
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            AppError::Other { detail } => assert!(detail.contains("整批超限")),
+            other => panic!("expected AppError::Other, got {other:?}"),
+        }
+
+        // 验证用例 B 的 input 未被写入（仍是 30MB 'A'）
+        let manifest = TestSuite::load(base, &suite_id).unwrap();
+        let case_b_meta = manifest
+            .cases
+            .iter()
+            .find(|c| c.id == case_b.id)
+            .unwrap();
+        assert_eq!(case_b_meta.input_size, 30 * 1024 * 1024);
+    }
+
+    #[test]
+    fn update_case_atomic_on_total_limit_exceeded() {
+        // 验证 update_case 在总量超限时不会部分写入：
+        // 同时更新 input 和 expected，其中 expected 会让总量超限，
+        // 应该整体失败，input 也不应被写入。
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let suite_id = TestSuite::create(base, None).unwrap();
+
+        // 用例 A：30MB input + 30MB expected = 60MB
+        let thirty_mb = vec![b'A'; 30 * 1024 * 1024];
+        let case_a = TestSuite::add_case_from_bytes(
+            base,
+            &suite_id,
+            "a".into(),
+            &thirty_mb,
+            &thirty_mb,
+            false,
+        )
+        .unwrap();
+        // 用例 B：30MB input + 30MB expected = 60MB，总量 120MB
+        let _case_b = TestSuite::add_case_from_bytes(
+            base,
+            &suite_id,
+            "b".into(),
+            &thirty_mb,
+            &thirty_mb,
+            false,
+        )
+        .unwrap();
+        // 用例 C：30MB input + 30MB expected = 60MB，总量 180MB
+        let _case_c = TestSuite::add_case_from_bytes(
+            base,
+            &suite_id,
+            "c".into(),
+            &thirty_mb,
+            &thirty_mb,
+            false,
+        )
+        .unwrap();
+
+        // 现在总量 180MB。同时更新用例 A 的 input（小）和 expected（50MB）：
+        // 新总量 = 180 - 30 - 30 + 1 + 50 = 171MB... 等等，这没超限。
+        // 重新设计：input 改成小值（1 byte），expected 改成 90MB
+        // 新总量 = 180 - 30 - 30 + 1 + 90 = 211MB > 200MB，应失败
+        let ninety_mb = vec![b'Z'; 90 * 1024 * 1024];
+        let too_big_expected = String::from_utf8_lossy(&ninety_mb).into_owned();
+        let result = TestSuite::update_case(
+            base,
+            &suite_id,
+            &case_a.id,
+            None,
+            Some("x".into()), // 小 input
+            Some(too_big_expected),
+            None,
+        );
+        assert!(result.is_err());
+
+        // 验证 input 未被写入（仍是 30MB 'A'，而不是 'x'）
+        let input_bytes = TestSuite::read_case_input(base, &suite_id, &case_a.id).unwrap();
+        assert_eq!(input_bytes.len(), 30 * 1024 * 1024);
+        assert_eq!(input_bytes[0], b'A');
+    }
+
+    // ===== UUID 校验 / 路径穿越防护测试 =====
+
+    #[test]
+    fn rejects_path_traversal_suite_id() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let suite_id = TestSuite::create(base, None).unwrap();
+
+        // 各种路径穿越尝试
+        let malicious_ids = [
+            "../../../etc/passwd",
+            "..\\..\\..\\windows",
+            "/etc/passwd",
+            "\\windows\\system32",
+            "..",
+            ".",
+            "",
+            "abc/../def",
+        ];
+        for bad in malicious_ids {
+            let result = TestSuite::load(base, bad);
+            assert!(result.is_err(), "load 应拒绝非法 suite_id: {bad}");
+            let err = result.unwrap_err();
+            match err {
+                AppError::Other { detail } => assert!(
+                    detail.contains("非法 suite_id"),
+                    "错误信息应包含「非法 suite_id」: {detail}"
+                ),
+                other => panic!("expected AppError::Other, got {other:?} for id={bad}"),
+            }
+        }
+
+        // delete 也要校验
+        let result = TestSuite::delete(base, "../../../etc");
+        assert!(result.is_err());
+
+        // get_all_previews 也要校验
+        let result = TestSuite::get_all_previews(base, "..");
+        assert!(result.is_err());
+
+        // 合法的 suite_id 仍然可用
+        let _ = TestSuite::load(base, &suite_id).unwrap();
+    }
+
+    #[test]
+    fn rejects_path_traversal_case_id() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let suite_id = TestSuite::create(base, None).unwrap();
+
+        let malicious_ids = [
+            "../../../etc/passwd",
+            "..\\..\\..\\windows",
+            "/etc/passwd",
+            "..",
+            "tc_../../etc",     // 有 tc_ 前缀但后续非法
+            "tc_",              // 空 UUID
+            "tc_not-a-uuid",    // 格式不对
+            "abc",              // 缺少 tc_ 前缀
+        ];
+        for bad in malicious_ids {
+            let result = TestSuite::get_case_preview(base, &suite_id, bad);
+            assert!(result.is_err(), "get_case_preview 应拒绝非法 case_id: {bad}");
+
+            let result = TestSuite::read_case_input(base, &suite_id, bad);
+            assert!(result.is_err(), "read_case_input 应拒绝非法 case_id: {bad}");
+
+            let result = TestSuite::read_case_expected(base, &suite_id, bad);
+            assert!(result.is_err(), "read_case_expected 应拒绝非法 case_id: {bad}");
+
+            let result = TestSuite::remove_case(base, &suite_id, bad);
+            assert!(result.is_err(), "remove_case 应拒绝非法 case_id: {bad}");
+        }
+    }
+
+    #[test]
+    fn accepts_valid_uuid_suite_and_case_ids() {
+        // 验证合法的 suite_id（标准 UUID）和 case_id（tc_ + simple UUID）能通过校验
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let suite_id = TestSuite::create(base, None).unwrap();
+        // create 返回的 suite_id 是标准 UUID 格式
+        assert!(Uuid::parse_str(&suite_id).is_ok());
+
+        let meta = TestSuite::add_case(base, &suite_id, "t".into(), "1".into(), "2".into(), false).unwrap();
+        // case_id 格式 tc_ + simple UUID
+        assert!(meta.id.starts_with("tc_"));
+        let uuid_part = &meta.id[3..];
+        assert!(Uuid::parse_str(uuid_part).is_ok());
+
+        // 合法 ID 的各种操作应成功
+        let _ = TestSuite::get_case_preview(base, &suite_id, &meta.id).unwrap();
+        let _ = TestSuite::read_case_input(base, &suite_id, &meta.id).unwrap();
+        let _ = TestSuite::read_case_expected(base, &suite_id, &meta.id).unwrap();
     }
 }

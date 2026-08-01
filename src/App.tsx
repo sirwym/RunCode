@@ -849,7 +849,9 @@ function App() {
     revealPanel("tests");
     if (!suiteId) return;
     const current = editorRef.current?.getCode() ?? activeTab.content;
-    void runTests(current, suiteId, strict);
+    // 从 useTestSuite 读取当前选中 id 列表（点击时一次性读取，避免订阅导致 useCallback 频繁失效）
+    const selectedIds = useTestSuite.getState().getSelectedIds();
+    void runTests(current, suiteId, strict, selectedIds);
   }, [activeTab, suiteId, runTests, strict, revealPanel]);
 
   // 同步最新运行回调与 tab 到 ref，供 keydown 监听器读取
