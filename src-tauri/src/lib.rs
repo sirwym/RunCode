@@ -123,7 +123,7 @@ pub fn run() {
                 app,
                 Some("关于 RunCode"),
                 Some(AboutMetadata {
-                    version: Some("0.1.2".into()),
+                    version: Some("1.0.0".into()),
                     authors: Some(vec!["YuanMing".into()]),
                     website: Some("https://github.com/YuanMing/RunCode".into()),
                     copyright: Some("© 2026 YuanMing".into()),
@@ -275,7 +275,7 @@ pub fn run() {
                         app,
                         Some("关于 RunCode"),
                         Some(AboutMetadata {
-                            version: Some("0.1.2".into()),
+                            version: Some("1.0.0".into()),
                             authors: Some(vec!["YuanMing".into()]),
                             website: Some("https://github.com/YuanMing/RunCode".into()),
                             copyright: Some("© 2026 YuanMing".into()),
