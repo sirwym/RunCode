@@ -30,6 +30,7 @@ function makeTestRunResult(passed: number, total: number): TestRunResult {
     compile_stderr: "",
     used_opt_level: "O2",
     results: [],
+    job_object_degraded: false,
   };
 }
 
