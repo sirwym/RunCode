@@ -931,6 +931,7 @@ function App() {
                 ? (effectiveCustomTheme.base_mode as "light" | "dark")
                 : undefined
             }
+            onFormat={formatRef.current}
           />
         </Panel>
         <PanelResizeHandle

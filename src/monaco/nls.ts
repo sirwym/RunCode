@@ -45,9 +45,6 @@ const ZH_MESSAGES: Record<string, string> = {
   "comment.block": "切换块注释",
   miToggleBlockComment: "切换块注释",
 
-  // === contextmenu.js ===
-  "action.showContextMenu.label": "显示编辑器上下文菜单",
-
   // === cursorUndo.js ===
   "cursor.undo": "光标撤销",
   "cursor.redo": "光标重做",

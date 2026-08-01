@@ -17,6 +17,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Copy, ClipboardPaste, BoxSelect, Eraser } from "lucide-react";
 
+// 平台检测（与 App.tsx / SettingsPanel.tsx / Editor.tsx 一致的内联表达式）
+const isMac =
+  typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
 // xterm 深色主题：背景与 global.css 中 --bg-terminal 深色值一致（#0a0a0a），
 // 避免与周围 panel-bg（#141414）产生色差；光标/选区/ANSI blue 与 RunCode 主题协调
 // 注：xterm 主题需直接提供颜色字符串（运行时适配层），无法消费 CSS 变量；
@@ -435,14 +439,17 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
           <DropdownMenuItem disabled={!hasSelection} onClick={handleCopy}>
             <Copy className="h-3 w-3" />
             {t("panel.terminalMenu.copy")}
+            <kbd className="menu-shortcut">{isMac ? "⌘C" : "Ctrl+C"}</kbd>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handlePaste}>
             <ClipboardPaste className="h-3 w-3" />
             {t("panel.terminalMenu.paste")}
+            <kbd className="menu-shortcut">{isMac ? "⌘V" : "Ctrl+V"}</kbd>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handleSelectAll}>
             <BoxSelect className="h-3 w-3" />
             {t("panel.terminalMenu.selectAll")}
+            <kbd className="menu-shortcut">{isMac ? "⌘A" : "Ctrl+A"}</kbd>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={handleClear}>

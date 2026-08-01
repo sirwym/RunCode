@@ -18,7 +18,6 @@ import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution";
 import "monaco-editor/esm/vs/editor/contrib/bracketMatching/browser/bracketMatching.js";
 import "monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js";
 import "monaco-editor/esm/vs/editor/contrib/comment/browser/comment.js";
-import "monaco-editor/esm/vs/editor/contrib/contextmenu/browser/contextmenu.js";
 import "monaco-editor/esm/vs/editor/contrib/cursorUndo/browser/cursorUndo.js";
 import "monaco-editor/esm/vs/editor/contrib/dnd/browser/dnd.js";
 import "monaco-editor/esm/vs/editor/contrib/find/browser/findController.js";

@@ -5,7 +5,11 @@ import {
   monacoBaseFromMode,
   RUNCODE_DARK_COLORS,
   RUNCODE_LIGHT_COLORS,
+  EDITOR_MENU_GROUPS,
+  type EditorMenuItem,
 } from "./Editor";
+import { zh } from "../locales/zh";
+import { en } from "../locales/en";
 import type { CustomThemeColors } from "../types";
 
 // 验证 effectiveTheme（general.theme 派生）→ 渲染层 Monaco 主题映射
@@ -366,6 +370,53 @@ describe("Monaco 已挂载后实时更新", () => {
     const keyDark = JSON.stringify(colors) + "|dark";
     const keyLight = JSON.stringify(colors) + "|light";
     expect(keyDark).not.toBe(keyLight);
+  });
+});
+
+// 编辑器右键菜单配置校验
+// 确保每项 i18n key 在 zh/en 中存在、action id 合法、分组结构正确
+describe("EDITOR_MENU_GROUPS 右键菜单配置", () => {
+  const allItems: EditorMenuItem[] = EDITOR_MENU_GROUPS.flat();
+
+  it("至少 5 个分组", () => {
+    expect(EDITOR_MENU_GROUPS.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("每项 key 在 zh.panel.editorMenu 中存在", () => {
+    const editorMenu = (zh.panel as unknown as Record<string, Record<string, unknown>>).editorMenu;
+    expect(editorMenu, "zh.panel.editorMenu 缺失").toBeDefined();
+    for (const item of allItems) {
+      expect(editorMenu[item.key], `zh.panel.editorMenu.${item.key} 缺失`).toBeDefined();
+    }
+  });
+
+  it("每项 key 在 en.panel.editorMenu 中存在", () => {
+    const editorMenu = (en.panel as unknown as Record<string, Record<string, unknown>>).editorMenu;
+    expect(editorMenu, "en.panel.editorMenu 缺失").toBeDefined();
+    for (const item of allItems) {
+      expect(editorMenu[item.key], `en.panel.editorMenu.${item.key} 缺失`).toBeDefined();
+    }
+  });
+
+  it("每项 action 非空或 custom === 'format'", () => {
+    for (const item of allItems) {
+      expect(
+        item.action !== "" || item.custom === "format",
+        `${item.key} 的 action 为空且非 custom format`
+      ).toBe(true);
+    }
+  });
+
+  it("快捷键字段非 undefined", () => {
+    for (const item of allItems) {
+      expect(typeof item.macShortcut).toBe("string");
+      expect(typeof item.winShortcut).toBe("string");
+    }
+  });
+
+  it("key 在所有分组内唯一", () => {
+    const keys = allItems.map((i) => i.key);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
 

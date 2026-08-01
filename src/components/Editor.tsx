@@ -4,14 +4,33 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor as MonacoEditorNS, languages as MonacoLanguagesNS } from "monaco-editor";
+import type { LucideIcon } from "lucide-react";
+import {
+  Undo, Redo, Scissors, Copy, ClipboardPaste, BoxSelect, ReplaceAll,
+  Search, Replace, AlignLeft, MessageSquareCode,
+  ChevronsDownUp, ChevronsUpDown,
+} from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import type { EditorSettings, CompileError, CustomThemeColors } from "../types";
 import { useTabs } from "../hooks/useTabs";
+import { useI18n } from "../hooks/useI18n";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { CPP_KEYWORDS_ALL, type KeywordKind } from "../monaco/cppKeywords";
 import { CPP_MEMBERS, inferTypeAtDot, buildMemberSuggestions } from "../monaco/cppMembers";
+
+// 平台检测（与 App.tsx / SettingsPanel.tsx 一致的内联表达式）
+const isMac =
+  typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
 // RunCode 品牌交互色（与 global.css 深色主题一致）
 // Monaco colors 仅接受 HEX（3/4/6/8 位），rgba() 会被忽略并回退到默认色（红色）
@@ -93,6 +112,44 @@ export function monacoBaseFromMode(baseMode: "light" | "dark" | undefined): "vs"
   return baseMode === "light" ? "vs" : "vs-dark";
 }
 
+// 编辑器右键菜单项配置（纯数据，便于单元测试）
+// action 为 Monaco action id，custom === "format" 时调用 onFormat 回调
+// macShortcut / winShortcut 空字符串表示无快捷键提示
+export interface EditorMenuItem {
+  key: string;
+  action: string;
+  icon: LucideIcon;
+  macShortcut: string;
+  winShortcut: string;
+  custom?: "format";
+}
+
+export const EDITOR_MENU_GROUPS: EditorMenuItem[][] = [
+  [
+    { key: "undo", action: "undo", icon: Undo, macShortcut: "⌘Z", winShortcut: "Ctrl+Z" },
+    { key: "redo", action: "redo", icon: Redo, macShortcut: "⇧⌘Z", winShortcut: "Ctrl+Y" },
+  ],
+  [
+    { key: "cut", action: "editor.action.clipboardCutAction", icon: Scissors, macShortcut: "⌘X", winShortcut: "Ctrl+X" },
+    { key: "copy", action: "editor.action.clipboardCopyAction", icon: Copy, macShortcut: "⌘C", winShortcut: "Ctrl+C" },
+    { key: "paste", action: "editor.action.clipboardPasteAction", icon: ClipboardPaste, macShortcut: "⌘V", winShortcut: "Ctrl+V" },
+    { key: "selectAll", action: "editor.action.selectAll", icon: BoxSelect, macShortcut: "⌘A", winShortcut: "Ctrl+A" },
+  ],
+  [
+    { key: "changeAll", action: "editor.action.changeAll", icon: ReplaceAll, macShortcut: "⌘F2", winShortcut: "Ctrl+F2" },
+  ],
+  [
+    { key: "find", action: "actions.find", icon: Search, macShortcut: "⌘F", winShortcut: "Ctrl+F" },
+    { key: "replace", action: "editor.action.startFindReplaceAction", icon: Replace, macShortcut: "⌥⌘F", winShortcut: "Ctrl+H" },
+  ],
+  [
+    { key: "format", action: "", icon: AlignLeft, macShortcut: "⇧⌥F", winShortcut: "Shift+Alt+F", custom: "format" },
+    { key: "commentLine", action: "editor.action.commentLine", icon: MessageSquareCode, macShortcut: "⌘/", winShortcut: "Ctrl+/" },
+    { key: "foldAll", action: "editor.foldAll", icon: ChevronsDownUp, macShortcut: "", winShortcut: "" },
+    { key: "unfoldAll", action: "editor.unfoldAll", icon: ChevronsUpDown, macShortcut: "", winShortcut: "" },
+  ],
+];
+
 // 后端返回的符号结构
 interface CodeSymbol {
   name: string;
@@ -124,12 +181,15 @@ interface EditorPaneProps {
   customColors?: CustomThemeColors;
   /** 自定义主题 base_mode（仅 theme === "custom" 时使用，决定 Monaco 继承 vs/vs-dark） */
   baseMode?: "light" | "dark";
+  /** 格式化代码回调（右键菜单"格式化代码"项调用） */
+  onFormat?: () => void;
 }
 
 const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane(
-  { onContentChange, onCursorPositionChange, settings, theme, customColors, baseMode },
+  { onContentChange, onCursorPositionChange, settings, theme, customColors, baseMode, onFormat },
   ref
 ) {
+  const t = useI18n((s) => s.t);
   const editorRef = useRef<MonacoEditorNS.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const modelsRef = useRef<Map<string, MonacoEditorNS.ITextModel>>(new Map());
@@ -140,6 +200,10 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   const decorationsRef = useRef<string[]>([]);
   // 同步最新 Monaco 主题给 onMount 闭包使用（避免闭包陈旧）
   const monacoThemeRef = useRef<string>("runcode-dark");
+  // 右键菜单状态（与 Terminal.tsx 一致的 Radix DropdownMenu 模式）
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
   // 用 ref 持有最新 onContentChange，避免 model.onDidChangeContent 闭包陈旧
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
@@ -154,6 +218,27 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   customColorsRef.current = customColors;
   const baseModeRef = useRef(baseMode);
   baseModeRef.current = baseMode;
+  // 用 ref 持有最新 onFormat，避免右键菜单闭包陈旧
+  const onFormatRef = useRef(onFormat);
+  onFormatRef.current = onFormat;
+
+  // 右键菜单：preventDefault + 记录相对坐标 + 打开菜单（与 Terminal.tsx 一致）
+  const handleContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMenuPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    setMenuOpen(true);
+  }, []);
+
+  // 菜单项点击：custom === "format" 调 onFormat，否则触发 Monaco action
+  const handleMenuClick = useCallback((item: EditorMenuItem) => {
+    if (item.custom === "format") {
+      onFormatRef.current?.();
+    } else {
+      editorRef.current?.trigger("menu", item.action, null);
+      editorRef.current?.focus();
+    }
+  }, []);
 
   useImperativeHandle(
     ref,
@@ -231,6 +316,13 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   const handleMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+
+    // 彻底移除 Command Palette（editor.action.quickCommand）
+    // 连带移除右键菜单项 + F1 快捷键 + QuickAccess provider 注册
+    // getAction 返回 IEditorAction 接口不暴露 dispose，但实际 EditorAction 继承 Disposable
+    const quickCommand = editor.getAction("editor.action.quickCommand") as
+      unknown as { dispose?: () => void } | undefined;
+    quickCommand?.dispose?.();
 
     // 定义 runcode-dark / runcode-light 继承主题
     // 保留 vs-dark / vs 原始语法高亮规则，仅覆盖光标/选区/当前行/焦点等交互色
@@ -463,40 +555,80 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   }, []);
 
   return (
-    <Editor
-      height="100%"
-      theme={monacoTheme}
-      onMount={handleMount}
-      options={{
-        fontSize: settings?.font_size ?? 14,
-        minimap: { enabled: settings?.minimap_enabled ?? false },
-        scrollBeyondLastLine: false,
-        automaticLayout: true,
-        tabSize: settings?.indent_size ?? 4,
-        insertSpaces: settings?.indent_style !== "tab",
-        wordWrap: (settings?.word_wrap ?? "on") as "on" | "off",
-        lineNumbers: (settings?.line_numbers ?? "on") as "on" | "off" | "relative",
-        fontFamily:
-          '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace',
-        quickSuggestions: settings?.enable_suggestions ?? true,
-        suggestOnTriggerCharacters: settings?.enable_suggestions ?? true,
-        autoClosingBrackets: settings?.auto_closing_brackets ? "always" : "never",
-        autoClosingQuotes: settings?.auto_closing_quotes ? "always" : "never",
-        renderLineHighlight: "all",
-        smoothScrolling: true,
-        cursorBlinking: "smooth",
-        cursorSmoothCaretAnimation: "on",
-        // 行号紧凑：3 字符宽 + 关闭 glyphMargin + 缩减装饰区
-        lineNumbersMinChars: 3,
-        glyphMargin: false,
-        lineDecorationsWidth: 4,
-        folding: true,
-        overviewRulerBorder: false,
-        hideCursorInOverviewRuler: true,
-        // 禁用等宽字体优化：可变字体度量不一致会导致光标错位
-        disableMonospaceOptimizations: true,
-      }}
-    />
+    <div
+      className="editor-pane-wrapper relative h-full"
+      ref={containerRef}
+      onContextMenu={handleContextMenu}
+    >
+      <Editor
+        height="100%"
+        theme={monacoTheme}
+        onMount={handleMount}
+        options={{
+          fontSize: settings?.font_size ?? 14,
+          minimap: { enabled: settings?.minimap_enabled ?? false },
+          scrollBeyondLastLine: false,
+          automaticLayout: true,
+          tabSize: settings?.indent_size ?? 4,
+          insertSpaces: settings?.indent_style !== "tab",
+          wordWrap: (settings?.word_wrap ?? "on") as "on" | "off",
+          lineNumbers: (settings?.line_numbers ?? "on") as "on" | "off" | "relative",
+          fontFamily:
+            '"JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace',
+          quickSuggestions: settings?.enable_suggestions ?? true,
+          suggestOnTriggerCharacters: settings?.enable_suggestions ?? true,
+          autoClosingBrackets: settings?.auto_closing_brackets ? "always" : "never",
+          autoClosingQuotes: settings?.auto_closing_quotes ? "always" : "never",
+          renderLineHighlight: "all",
+          smoothScrolling: true,
+          cursorBlinking: "smooth",
+          cursorSmoothCaretAnimation: "on",
+          // 行号紧凑：3 字符宽 + 关闭 glyphMargin + 缩减装饰区
+          lineNumbersMinChars: 3,
+          glyphMargin: false,
+          lineDecorationsWidth: 4,
+          folding: true,
+          overviewRulerBorder: false,
+          hideCursorInOverviewRuler: true,
+          // 禁用等宽字体优化：可变字体度量不一致会导致光标错位
+          disableMonospaceOptimizations: true,
+          // 禁用 Monaco 内置右键菜单，改用 Radix DropdownMenu（与终端一致）
+          contextmenu: false,
+        }}
+      />
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen} modal={false}>
+        <DropdownMenuTrigger asChild>
+          <span
+            style={{
+              position: "absolute",
+              left: menuPos.x,
+              top: menuPos.y,
+              width: 0,
+              height: 0,
+              pointerEvents: "none",
+            }}
+          />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          {EDITOR_MENU_GROUPS.map((group, gi) => (
+            <div key={gi}>
+              {gi > 0 && <DropdownMenuSeparator />}
+              {group.map((item) => {
+                const Icon = item.icon;
+                const shortcut = isMac ? item.macShortcut : item.winShortcut;
+                return (
+                  <DropdownMenuItem key={item.key} onClick={() => handleMenuClick(item)}>
+                    <Icon className="h-3 w-3" />
+                    {t(`panel.editorMenu.${item.key}`)}
+                    {shortcut && <kbd className="menu-shortcut">{shortcut}</kbd>}
+                  </DropdownMenuItem>
+                );
+              })}
+            </div>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 });
 
