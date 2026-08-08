@@ -167,6 +167,7 @@ export interface EditorHandle {
   disposeModel: (tabId: string) => void;
   setCompileErrors: (errors: CompileError[]) => void;
   clearCompileErrors: () => void;
+  revealLine: (line: number) => void;
 }
 
 interface EditorPaneProps {
@@ -308,6 +309,10 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
         const editor = editorRef.current;
         if (!editor) return;
         decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
+      },
+      revealLine: (line: number) => {
+        editorRef.current?.revealLineInCenter(line);
+        editorRef.current?.focus();
       },
     }),
     []

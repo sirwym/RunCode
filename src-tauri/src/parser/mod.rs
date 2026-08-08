@@ -8,6 +8,7 @@ use tree_sitter::{Node, Parser, Tree};
 
 use crate::error::AppError;
 
+pub mod cfg;
 pub mod formatter;
 
 // Parser 不是 Send，需要 Mutex 保护
@@ -118,7 +119,7 @@ fn walk(node: &Node, symbols: &mut Vec<Symbol>, source: &[u8]) {
 
 /// 从 declarator 节点中提取函数名
 /// declarator 可能是 function_declarator / pointer_declarator / parenthesized_declarator 等嵌套结构
-fn extract_function_name(decl: &Node, source: &[u8]) -> Option<String> {
+pub(crate) fn extract_function_name(decl: &Node, source: &[u8]) -> Option<String> {
     let mut current = *decl;
     loop {
         match current.kind() {

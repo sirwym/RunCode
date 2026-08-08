@@ -248,3 +248,28 @@ export interface FormatResult {
   code: string;
   backend: "clang-format" | "builtin";
 }
+
+// ============ 控制流图（CFG） ============
+
+// 与 Rust 端 parser/cfg.rs CfgNode 对应
+export interface CfgNode {
+  id: string;
+  label: string;
+  line: number; // 1-based 行号
+  kind: string; // "entry" / "exit" / "statement" / "condition" / "loop" / "switch_case"
+}
+
+// 与 Rust 端 parser/cfg.rs CfgEdge 对应
+export interface CfgEdge {
+  from: string;
+  to: string;
+  label: string | null; // "true" / "false" / "break" / "continue" / null
+}
+
+// 与 Rust 端 parser/cfg.rs CfgResult 对应
+export interface CfgResult {
+  mermaid: string;
+  nodes: CfgNode[];
+  edges: CfgEdge[];
+  warning: string | null;
+}

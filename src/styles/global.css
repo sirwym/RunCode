@@ -1931,3 +1931,98 @@ body::before {
   height: 200px;
   overflow: hidden;
 }
+
+/* ============== 控制流图（CFG）面板 ============== */
+.flowchart-panel {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--panel-bg);
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.flowchart-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-md);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  min-height: 30px;
+}
+
+.flowchart-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 0;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.flowchart-refresh:hover:not(:disabled) {
+  color: var(--text);
+  background-color: var(--panel-bg-alt);
+}
+
+.flowchart-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.flowchart-refresh .spin {
+  animation: flowchart-spin 0.8s linear infinite;
+}
+
+@keyframes flowchart-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.flowchart-warning {
+  font-size: 11px;
+  color: var(--warning);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flowchart-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+  user-select: none;
+}
+
+.flowchart-content.dragging {
+  cursor: grabbing;
+}
+
+.flowchart-svg-wrapper {
+  display: block;
+  transform-origin: 0 0;
+}
+
+.flowchart-svg-wrapper > svg {
+  height: auto;
+}
+
+.flowchart-message {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: var(--space-lg);
+}
+
+.flowchart-message.error {
+  color: var(--error);
+}

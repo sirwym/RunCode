@@ -28,7 +28,7 @@ pub use documents::{open_file, save_file};
 pub use format_cmd::format_code;
 pub use import_cmd::import_test_cases;
 pub use menu_cmd::update_view_menu_state;
-pub use parser_cmd::extract_code_symbols;
+pub use parser_cmd::{extract_code_symbols, generate_cfg};
 pub use pty_run::{resize_pty, start_pty_run, stop_pty_run, write_pty_stdin};
 pub use recent_cmd::{add_recent_file, clear_recent_files, get_recent_files, remove_recent_file};
 pub use settings_cmd::{

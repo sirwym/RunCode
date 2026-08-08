@@ -180,4 +180,25 @@ describe("i18n 完整性", () => {
       expect(getByPath(en, k), `en 缺少 ${k}`).toBeTypeOf("string");
     });
   });
+
+  // 控制流图（CFG）功能新增的 i18n key
+  describe("CFG 控制流图 key", () => {
+    const requiredFlowchartKeys = [
+      "panel.flowchart",
+      "panel.flowchartLoading",
+      "panel.flowchartError",
+      "panel.flowchartNoFunction",
+      "panel.flowchartNoCode",
+      "panel.flowchartWarning",
+      "panel.flowchartRefresh",
+      "panel.flowchartZoomIn",
+      "panel.flowchartZoomOut",
+      "panel.flowchartZoomReset",
+    ];
+
+    it.each(requiredFlowchartKeys)("zh 与 en 都包含 %s", (k) => {
+      expect(getByPath(zh, k), `zh 缺少 ${k}`).toBeTypeOf("string");
+      expect(getByPath(en, k), `en 缺少 ${k}`).toBeTypeOf("string");
+    });
+  });
 });

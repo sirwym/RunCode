@@ -11,6 +11,7 @@ import EditorPane, { type EditorHandle } from "./components/Editor";
 import TabBar from "./components/TabBar";
 import TestCasesPanel from "./components/TestCasesPanel";
 import Terminal from "./components/Terminal";
+import FlowchartPanel from "./components/FlowchartPanel";
 import StatusBar from "./components/StatusBar";
 import SettingsPanel from "./components/SettingsPanel";
 import RecentFilesDialog from "./components/RecentFilesDialog";
@@ -35,7 +36,7 @@ import {
 import { parseGccErrors } from "./utils/compileErrors";
 import { hexToRgb } from "./utils/colorExtract";
 
-type PanelTab = "tests" | "terminal";
+type PanelTab = "tests" | "terminal" | "flowchart";
 
 /**
  * 解析运行快捷键：根据按键事件和平台返回 "terminal" | "tests" | null。
@@ -963,6 +964,14 @@ function App() {
             >
               {t("panel.tests")}
             </button>
+            {activeTab?.language === "cpp" && (
+              <button
+                className={"panel-tab" + (tab === "flowchart" ? " active" : "")}
+                onClick={() => setTab("flowchart")}
+              >
+                {t("panel.flowchart")}
+              </button>
+            )}
             <button
               className="panel-close"
               title={t("panel.close")}
@@ -1005,6 +1014,19 @@ function App() {
                 compileWarning={compileWarning}
                 onFocusChange={(focused) => { terminalFocusedRef.current = focused; }}
                 visible={tab === "terminal"}
+              />
+            </section>
+            <section style={{ display: tab === "flowchart" ? undefined : "none" }}>
+              <FlowchartPanel
+                code={activeTab?.content ?? ""}
+                onNodeClick={(line) => editorRef.current?.revealLine(line)}
+                visible={tab === "flowchart"}
+                theme={effectiveTheme}
+                baseMode={
+                  effectiveCustomTheme
+                    ? (effectiveCustomTheme.base_mode as "light" | "dark")
+                    : undefined
+                }
               />
             </section>
           </div>

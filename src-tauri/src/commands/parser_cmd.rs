@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use crate::parser::cfg::{generate_cfg as generate_cfg_impl, CfgResult};
 use crate::parser::{extract_symbols, Symbol};
 
 /// 提取当前文件中的顶层符号（函数/全局变量/结构体/宏定义）
@@ -12,4 +13,18 @@ pub async fn extract_code_symbols(code: String) -> Result<Vec<Symbol>, AppError>
             detail: format!("符号提取任务失败: {e}"),
         })?;
     Ok(symbols)
+}
+
+/// 生成 C++ 函数控制流图
+/// 输入：C++ 源码字符串
+/// 输出：CfgResult（Mermaid 文本 + 节点元数据 + 警告）
+#[tauri::command]
+pub async fn generate_cfg(code: String) -> Result<CfgResult, AppError> {
+    let result = tokio::task::spawn_blocking(move || generate_cfg_impl(&code))
+        .await
+        .map_err(|e| AppError::Other {
+            detail: format!("CFG 生成任务失败: {e}"),
+        })?
+        .map_err(|e| AppError::Other { detail: e })?;
+    Ok(result)
 }
