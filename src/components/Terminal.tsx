@@ -100,6 +100,23 @@ export function buildCustomXtermTheme(
   };
 }
 
+/// 选区保活时的缓冲积压上限（512KB）。
+/// 超过此大小强制 flush，防止死循环输出导致 buffer 无限增长。
+const MAX_DEFERRED_BUFFER_BYTES = 512 * 1024;
+
+/// 判断是否应推迟 flush 以保留 xterm 选区。
+///
+/// xterm.js 的 Terminal.write() 会清除当前选区。当用户选中文本（如准备复制）
+/// 时，若此时有新输出到达，write() 会清除选区导致用户操作中断。
+/// 此函数在"有选区"且"缓冲未超限"时返回 true，让调用方推迟一帧再写入。
+///
+/// @param hasSelection - xterm 当前是否有选区
+/// @param bufferSize   - 当前积压的缓冲大小（buffer.length）
+/// @returns true 表示应推迟 flush，false 表示应立即 flush
+export function shouldDeferFlush(hasSelection: boolean, bufferSize: number): boolean {
+    return hasSelection && bufferSize > 0 && bufferSize < MAX_DEFERRED_BUFFER_BYTES;
+}
+
 interface TerminalProps {
   runId: string | null; // PTY 会话 ID
   onExit: (exitCode: number | null, killedBy: string | null, maxRssKb: number | null) => void;
@@ -181,22 +198,48 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     setMenuOpen(true);
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     const term = termRef.current;
     if (!term) return;
     const sel = term.getSelection();
-    if (sel) void navigator.clipboard.writeText(sel).catch(() => {});
+    if (!sel) return;
+    // WebView2 中 navigator.clipboard 可能因安全上下文或权限问题失败，
+    // 使用 execCommand fallback 确保复制可靠工作
+    try {
+      await navigator.clipboard.writeText(sel);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = sel;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch { /* ignore */ }
+      document.body.removeChild(ta);
+    }
   };
 
   const handlePaste = async () => {
     const term = termRef.current;
     if (!term) return;
+    let text: string | null = null;
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) term.paste(text);
+      text = await navigator.clipboard.readText();
     } catch {
-      // 剪贴板读取失败（权限受限等），静默忽略
+      // WebView2 中 clipboard API 可能不可用，尝试 execCommand fallback
+      const ta = document.createElement("textarea");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      try {
+        if (document.execCommand("paste")) {
+          text = ta.value;
+        }
+      } catch { /* ignore */ }
+      document.body.removeChild(ta);
     }
+    if (text) term.paste(text);
   };
 
   const handleSelectAll = () => {
@@ -209,6 +252,12 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     term.clear();
     term.scrollToBottom();
   };
+
+  // 保存最新的 handleCopy / handlePaste 到 ref，供 keydown 监听器使用
+  const handleCopyRef = useRef(handleCopy);
+  handleCopyRef.current = handleCopy;
+  const handlePasteRef = useRef(handlePaste);
+  handlePasteRef.current = handlePaste;
 
   // 初始化终端（只执行一次）
   useEffect(() => {
@@ -242,6 +291,35 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     textarea?.addEventListener("focus", handleFocus);
     textarea?.addEventListener("blur", handleBlur);
 
+    // 终端键盘快捷键：
+    // - Ctrl+C：有选区时复制，无选区时放行让 xterm 发送 SIGINT（^C）给子进程
+    // - Ctrl+Shift+C：强制复制选区（即使无选区也阻止默认行为）
+    // - Ctrl+Shift+V：粘贴
+    const handleTerminalKeydown = (e: KeyboardEvent) => {
+      // 智能 Ctrl+C：有选区时拦截并复制，无选区时不拦截（xterm 发送 \x03）
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === "C" || e.key === "c")) {
+        const sel = term.getSelection();
+        if (sel) {
+          e.preventDefault();
+          e.stopPropagation();
+          void handleCopyRef.current();
+        }
+        return;
+      }
+      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
+        if (e.key === "C" || e.key === "c") {
+          e.preventDefault();
+          e.stopPropagation();
+          void handleCopyRef.current();
+        } else if (e.key === "V" || e.key === "v") {
+          e.preventDefault();
+          e.stopPropagation();
+          void handlePasteRef.current();
+        }
+      }
+    };
+    textarea?.addEventListener("keydown", handleTerminalKeydown, true);
+
     // 容器大小变化时自动 fit + 通知后端 resize
     const ro = new ResizeObserver(() => {
       if (!fitRef.current || !termRef.current) return;
@@ -255,6 +333,7 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
 
     return () => {
       ro.disconnect();
+      textarea?.removeEventListener("keydown", handleTerminalKeydown, true);
       textarea?.removeEventListener("focus", handleFocus);
       textarea?.removeEventListener("blur", handleBlur);
       term.dispose();
@@ -332,18 +411,24 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     // disposed 标志：防止 cleanup 在 setup 的 await listen 完成前调用导致监听器泄漏
     let disposed = false;
 
-    const setup = async () => {
-      // 输出节流：用 rAF 批量 write，避免死循环刷屏程序淹没事件循环
-      let buffer = "";
-      let rafId: number | null = null;
-      const flush = () => {
-        rafId = null;
-        if (buffer) {
-          term.write(buffer);
-          buffer = "";
-        }
-      };
+    // 输出节流：用 rAF 批量 write，避免死循环刷屏程序淹没事件循环
+    // buffer / rafId 声明在 setup 外部，以便 cleanup 能 cancelAnimationFrame
+    let buffer = "";
+    let rafId: number | null = null;
+    const flush = () => {
+      // 有选区时推迟写入，避免 term.write() 清除用户选区
+      if (shouldDeferFlush(term.hasSelection(), buffer.length)) {
+        rafId = requestAnimationFrame(flush);
+        return;
+      }
+      rafId = null;
+      if (buffer) {
+        term.write(buffer);
+        buffer = "";
+      }
+    };
 
+    const setup = async () => {
       unlistenOutput = await listen<{ run_id: string; data: string }>(
         "pty_output",
         (e) => {
@@ -369,20 +454,20 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
         max_rss_kb: number;
       }>("pty_exit", (e) => {
         if (e.payload.run_id === runId) {
-          // 退出前冲刷残留缓冲
-          if (rafId !== null) {
-            cancelAnimationFrame(rafId);
-            rafId = null;
-          }
-          if (buffer) {
-            term.write(buffer);
-            buffer = "";
-          }
-          // 被信号终止时在正文区打印崩溃提示（如越界访问触发的 SIGSEGV）
+          // 将退出序列追加到 buffer，由 flush 统一写入。
+          // flush 会在有选区时推迟写入（shouldDeferFlush），
+          // 避免 pty_exit 延迟到达时 term.write() 清除用户选区。
+          // Windows ConPTY 子进程退出后不返回 EOF，drain_reader_with_timeout
+          // 有 500ms 超时，期间用户可能已开始选中输出文本。
           if (e.payload.killed_by === "signal") {
-            term.write(`\r\n\x1b[31m${t("killed.signalTerminated")}\x1b[0m\r\n`);
+            buffer += `\r\n\x1b[31m${t("killed.signalTerminated")}\x1b[0m\r\n`;
           }
-          term.write("\x1b[?25h");
+          buffer += "\x1b[?25h";
+          // 确保有 flush 被调度（可能已有 rAF 在等待）
+          if (rafId === null) {
+            rafId = requestAnimationFrame(flush);
+          }
+          // 立即通知 UI 退出状态（不涉及终端写入，不影响选区）
           onExitRef.current(e.payload.exit_code, e.payload.killed_by, e.payload.max_rss_kb || null);
         }
       });
@@ -414,6 +499,11 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
 
     return () => {
       disposed = true;
+      // 取消未完成的 rAF，防止 cleanup 后仍有无尽循环写入旧 terminal
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       if (unlistenOutput) unlistenOutput();
       if (unlistenExit) unlistenExit();
       dataDisposable.dispose();
@@ -443,12 +533,12 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
           <DropdownMenuItem disabled={!hasSelection} onClick={handleCopy}>
             <Copy className="h-3 w-3" />
             {t("panel.terminalMenu.copy")}
-            <kbd className="menu-shortcut">{isMac ? "⌘C" : "Ctrl+C"}</kbd>
+            <kbd className="menu-shortcut">{isMac ? "⌘C" : "Ctrl+Shift+C"}</kbd>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handlePaste}>
             <ClipboardPaste className="h-3 w-3" />
             {t("panel.terminalMenu.paste")}
-            <kbd className="menu-shortcut">{isMac ? "⌘V" : "Ctrl+V"}</kbd>
+            <kbd className="menu-shortcut">{isMac ? "⌘V" : "Ctrl+Shift+V"}</kbd>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handleSelectAll}>
             <BoxSelect className="h-3 w-3" />

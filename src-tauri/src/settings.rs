@@ -520,6 +520,11 @@ pub fn build_compile_args(
     // 无颜色诊断（教学场景固定，GCC 与 clang 均兼容）
     args.push("-fno-diagnostics-color".into());
 
+    // 强制执行字符集为 UTF-8：GCC 默认使用系统 locale（Windows 为 GBK），
+    // 导致 cout/printf 输出的中文字符串在 ConPTY（UTF-8 代码页）下乱码。
+    // macOS/Linux 默认已是 UTF-8，此参数为 no-op。
+    args.push("-fexec-charset=UTF-8".into());
+
     // 附加参数（黑名单校验）
     let extra = validate_extra_args(&settings.extra_args)?;
     args.extend(extra);

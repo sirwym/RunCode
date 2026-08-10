@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { XTERM_DARK_THEME, XTERM_LIGHT_THEME, buildCustomXtermTheme } from "./Terminal";
+import { XTERM_DARK_THEME, XTERM_LIGHT_THEME, buildCustomXtermTheme, shouldDeferFlush } from "./Terminal";
 import type { CustomThemeColors } from "../types";
 
 // 验证 xterm 主题与品牌令牌一致
@@ -207,5 +207,27 @@ describe("buildCustomXtermTheme baseMode ANSI 预设", () => {
     expect(dark.background).toBe(light.background);
     // 但 ANSI red 不同
     expect(dark.red).not.toBe(light.red);
+  });
+});
+
+describe("shouldDeferFlush 选区保活决策", () => {
+  it("有选区且缓冲未超限时返回 true", () => {
+    expect(shouldDeferFlush(true, 1024)).toBe(true);
+  });
+
+  it("无选区时返回 false", () => {
+    expect(shouldDeferFlush(false, 1024)).toBe(false);
+  });
+
+  it("有选区但缓冲超过 512KB 时返回 false", () => {
+    expect(shouldDeferFlush(true, 512 * 1024)).toBe(false);
+  });
+
+  it("有选区且缓冲为 511KB 时返回 true（边界内侧）", () => {
+    expect(shouldDeferFlush(true, 511 * 1024)).toBe(true);
+  });
+
+  it("缓冲为 0 时返回 false（避免空 buffer 无限 rAF 循环）", () => {
+    expect(shouldDeferFlush(true, 0)).toBe(false);
   });
 });

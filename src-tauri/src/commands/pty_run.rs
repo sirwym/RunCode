@@ -196,6 +196,38 @@ pub async fn start_pty_run(
     result
 }
 
+/// 生成 Windows chcp 65001 包装命令字符串（纯函数，便于单测）。
+///
+/// 不对 exe_path 加内层双引号：portable_pty 会为含空格的参数加外层引号，
+/// 若内层也有引号则 cmd.exe 的 /c 引号规则会与 \" 转义冲突，导致路径无法识别。
+/// 不加内层引号时，portable_pty 加的外层引号被 cmd.exe 规则2剥离，
+/// && 恢复为命令分隔符，exe_path 作为无空格的第三条命令直接执行。
+/// TempDir 路径在 Windows 上使用 8.3 短名（如 ADMINI~1），不含空格。
+#[cfg(windows)]
+fn build_chcp_command_str(exe_path: &std::path::Path) -> String {
+    format!("chcp 65001 >nul && {}", exe_path.display())
+}
+
+/// 构建 PTY 子进程启动命令。
+///
+/// Windows：用 `cmd /c "chcp 65001 >nul && exe_path"` 包装启动，
+/// 确保子进程的 ConPTY 伪控制台使用 UTF-8(65001) 代码页，
+/// 解决中文等非 ASCII 字符输出乱码问题。
+/// macOS/Unix：直接启动 exe_path，无需代码页设置。
+fn build_pty_command(exe_path: &std::path::Path) -> CommandBuilder {
+    #[cfg(windows)]
+    {
+        let mut cmd = CommandBuilder::new("cmd");
+        cmd.arg("/c");
+        cmd.arg(build_chcp_command_str(exe_path));
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        CommandBuilder::new(exe_path)
+    }
+}
+
 async fn start_pty_run_inner(
     code: String,
     run_id: String,
@@ -244,7 +276,7 @@ async fn start_pty_run_inner(
         })?;
 
     // 4. spawn 子进程
-    let mut cmd = CommandBuilder::new(&exe_path);
+    let mut cmd = build_pty_command(&exe_path);
     cmd.cwd(work_dir.path());
     // 注入 UTF-8 环境变量，确保 Python 等运行时在 Windows 上正确输出 UTF-8。
     // C++ 程序不受影响（字面量编码由编译器决定，与运行时环境变量无关）。
@@ -565,6 +597,31 @@ pub async fn stop_pty_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn build_chcp_command_str_simple_path() {
+        let exe = std::path::Path::new(r"D:\code\a.exe");
+        let cmd_str = build_chcp_command_str(exe);
+        assert_eq!(cmd_str, r"chcp 65001 >nul && D:\code\a.exe");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn build_chcp_command_str_no_inner_quotes() {
+        // 不含内层引号：portable_pty 外层引号被 cmd.exe 剥离后，&& 恢复为分隔符
+        let exe = std::path::Path::new(r"C:\Program Files\my app\test.exe");
+        let cmd_str = build_chcp_command_str(exe);
+        assert!(!cmd_str.contains("\""));
+        assert_eq!(cmd_str, r"chcp 65001 >nul && C:\Program Files\my app\test.exe");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn build_pty_command_unix_direct_launch() {
+        let exe = std::path::Path::new("/tmp/program");
+        let _cmd = build_pty_command(exe);
+    }
 
     #[test]
     fn find_valid_utf8_boundary_empty() {
