@@ -30,11 +30,12 @@ walkdir = "2"
 tree-sitter = "0.22"
 tree-sitter-cpp = "0.22"
 
-# Windows 平台依赖（JobObject + GetProcessMemoryInfo）
+# Windows 平台依赖（JobObject + GetProcessMemoryInfo + Console 代码页）
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_System_Console",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_System_ProcessStatus",

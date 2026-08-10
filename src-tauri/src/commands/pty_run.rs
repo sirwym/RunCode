@@ -51,6 +51,54 @@ fn determine_kill_reason(output_limit: bool, signal: Option<&str>) -> Option<&'s
     }
 }
 
+/// 从字节切片末尾向前查找最后一个完整 UTF-8 字符的结束位置。
+///
+/// 返回 split_pos，使得：
+/// - `&bytes[..split_pos]` 全部是完整的 UTF-8 字符（可安全 from_utf8_lossy）
+/// - `&bytes[split_pos..]` 是末尾可能不完整的 UTF-8 起始字节（最多 4 字节，需保留到下次 read 拼接）
+///
+/// UTF-8 字符结构：
+/// - 0xxxxxxx                   (1 字节, ASCII)
+/// - 110xxxxx 10xxxxxx          (2 字节)
+/// - 1110xxxx 10xxxxxx 10xxxxxx (3 字节)
+/// - 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx (4 字节)
+///
+/// 起始字节：`(b & 0xC0) != 0x80`；续接字节：`(b & 0xC0) == 0x80`
+fn find_valid_utf8_boundary(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    // UTF-8 字符最长 4 字节，从末尾最多向前看 4 字节
+    let scan_start = bytes.len().saturating_sub(4);
+    for i in (scan_start..bytes.len()).rev() {
+        let b = bytes[i];
+        // 跳过续接字节，找起始字节
+        if (b & 0xC0) == 0x80 {
+            continue;
+        }
+        // 计算该字符预期长度
+        let expected_len = if b < 0x80 {
+            1
+        } else if b < 0xE0 {
+            2
+        } else if b < 0xF0 {
+            3
+        } else {
+            4
+        };
+        let remaining = bytes.len() - i;
+        if remaining >= expected_len {
+            // 该字符完整，全部数据有效
+            return bytes.len();
+        } else {
+            // 该字符不完整，从该字节之前截断（保留该字节及之后作为 pending）
+            return i;
+        }
+    }
+    // 扫描范围内全是续接字节（理论上不该发生，防御性返回 0）
+    0
+}
+
 /// start_pty_run 的返回值。
 /// 编译失败时不 emit pty_exit，直接通过结构化结果返回 stderr，
 /// 避免前端 invoke 返回前 listen 未注册导致事件丢失。
@@ -198,6 +246,10 @@ async fn start_pty_run_inner(
     // 4. spawn 子进程
     let mut cmd = CommandBuilder::new(&exe_path);
     cmd.cwd(work_dir.path());
+    // 注入 UTF-8 环境变量，确保 Python 等运行时在 Windows 上正确输出 UTF-8。
+    // C++ 程序不受影响（字面量编码由编译器决定，与运行时环境变量无关）。
+    cmd.env("PYTHONUTF8", "1");
+    cmd.env("PYTHONIOENCODING", "utf-8");
     let child = pair.slave.spawn_command(cmd).map_err(|e| AppError::Other {
         detail: e.to_string(),
     })?;
@@ -233,6 +285,9 @@ async fn start_pty_run_inner(
         let mut reader = reader;
         let mut buf = [0u8; 4096];
         let mut total_bytes: u64 = 0;
+        // 保留上一次 read 末尾可能不完整的 UTF-8 字节（最多 4 字节），
+        // 拼接到下次 read 的数据前再解码，避免多字节字符在 read 边界被 from_utf8_lossy 替换为 U+FFFD。
+        let mut pending: Vec<u8> = Vec::with_capacity(4);
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
@@ -246,17 +301,42 @@ async fn start_pty_run_inner(
                         }
                         break;
                     }
-                    let data = String::from_utf8_lossy(&buf[..n]).into_owned();
-                    let _ = app_reader.emit(
-                        "pty_output",
-                        PtyOutputEvent {
-                            run_id: run_id_reader.clone(),
-                            data,
-                        },
-                    );
+
+                    // 拼接 pending + 本次读取的数据
+                    let mut chunk: Vec<u8> = std::mem::take(&mut pending);
+                    chunk.extend_from_slice(&buf[..n]);
+
+                    // 分离末尾不完整的 UTF-8 序列到 pending
+                    let split_pos = find_valid_utf8_boundary(&chunk);
+                    if split_pos < chunk.len() {
+                        pending = chunk[split_pos..].to_vec();
+                        chunk.truncate(split_pos);
+                    }
+
+                    if !chunk.is_empty() {
+                        let data = String::from_utf8_lossy(&chunk).into_owned();
+                        let _ = app_reader.emit(
+                            "pty_output",
+                            PtyOutputEvent {
+                                run_id: run_id_reader.clone(),
+                                data,
+                            },
+                        );
+                    }
                 }
                 Err(_) => break,
             }
+        }
+        // EOF 后处理残留的 pending（无效字节，from_utf8_lossy 替换为 U+FFFD）
+        if !pending.is_empty() {
+            let data = String::from_utf8_lossy(&pending).into_owned();
+            let _ = app_reader.emit(
+                "pty_output",
+                PtyOutputEvent {
+                    run_id: run_id_reader.clone(),
+                    data,
+                },
+            );
         }
     });
 
@@ -485,6 +565,51 @@ pub async fn stop_pty_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_valid_utf8_boundary_empty() {
+        assert_eq!(find_valid_utf8_boundary(&[]), 0);
+    }
+
+    #[test]
+    fn find_valid_utf8_boundary_all_ascii() {
+        assert_eq!(find_valid_utf8_boundary(b"hello"), 5);
+    }
+
+    #[test]
+    fn find_valid_utf8_boundary_complete_multibyte() {
+        // "中文" = E4 B8 AD E6 96 87（6 字节，完整）
+        let bytes = [0xE4, 0xB8, 0xAD, 0xE6, 0x96, 0x87];
+        assert_eq!(find_valid_utf8_boundary(&bytes), 6);
+    }
+
+    #[test]
+    fn find_valid_utf8_boundary_truncated_3byte_char() {
+        // "中" = E4 B8 AD，只保留前 2 字节 E4 B8
+        let bytes = [0xE4, 0xB8];
+        assert_eq!(find_valid_utf8_boundary(&bytes), 0);
+    }
+
+    #[test]
+    fn find_valid_utf8_boundary_mixed_ascii_and_truncated() {
+        // "abc" + "中"的前2字节 = 61 62 63 E4 B8
+        let bytes = [0x61, 0x62, 0x63, 0xE4, 0xB8];
+        assert_eq!(find_valid_utf8_boundary(&bytes), 3);
+    }
+
+    #[test]
+    fn find_valid_utf8_boundary_truncated_4byte_char() {
+        // 4字节字符 F0 90 8C 88，只保留前 2 字节
+        let bytes = [0xF0, 0x90];
+        assert_eq!(find_valid_utf8_boundary(&bytes), 0);
+    }
+
+    #[test]
+    fn find_valid_utf8_boundary_complete_then_truncated() {
+        // 完整 "中"(E4 B8 AD) + 不完整的 "文"(E6 96)
+        let bytes = [0xE4, 0xB8, 0xAD, 0xE6, 0x96];
+        assert_eq!(find_valid_utf8_boundary(&bytes), 3);
+    }
 
     #[test]
     fn drain_reader_returns_true_when_thread_finishes_within_timeout() {
