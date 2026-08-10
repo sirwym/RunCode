@@ -37,6 +37,7 @@ export const zh = {
     signal: "被信号杀死",
     cancelled: "已取消",
     outputLimit: "输出超限（已终止）",
+    signalTerminated: "程序被信号终止（可能崩溃）",
   },
   tests: {
     title: "多样例测试",

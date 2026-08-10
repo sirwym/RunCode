@@ -378,6 +378,10 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
             term.write(buffer);
             buffer = "";
           }
+          // 被信号终止时在正文区打印崩溃提示（如越界访问触发的 SIGSEGV）
+          if (e.payload.killed_by === "signal") {
+            term.write(`\r\n\x1b[31m${t("killed.signalTerminated")}\x1b[0m\r\n`);
+          }
           term.write("\x1b[?25h");
           onExitRef.current(e.payload.exit_code, e.payload.killed_by, e.payload.max_rss_kb || null);
         }

@@ -32,10 +32,23 @@ struct PtyOutputEvent {
 struct PtyExitEvent {
     run_id: String,
     exit_code: Option<i32>,
-    /// "cancelled" / null（PTY 无墙钟超时）
+    /// "cancelled" / "signal" / "output_limit" / null（PTY 无墙钟超时）
     killed_by: Option<&'static str>,
     /// 进程内存峰值（KB），无法获取时为 0
     max_rss_kb: u64,
+}
+
+/// 根据输出超限标志与信号状态判定 kill 原因（纯函数，便于单测）
+/// - output_limit 优先于 signal：输出超限时读取线程主动 kill，可能附带信号
+/// - signal 非空且非空字符串才视为信号终止（如 SIGSEGV/SIGABRT）
+fn determine_kill_reason(output_limit: bool, signal: Option<&str>) -> Option<&'static str> {
+    if output_limit {
+        Some("output_limit")
+    } else if signal.filter(|s| !s.is_empty()).is_some() {
+        Some("signal")
+    } else {
+        None
+    }
 }
 
 /// start_pty_run 的返回值。
@@ -327,7 +340,8 @@ async fn start_pty_run_inner(
             });
         }
 
-        let exit_code = child.wait().ok().map(|s| s.exit_code() as i32);
+        let wait_status = child.wait().ok();
+        let exit_code = wait_status.as_ref().map(|s| s.exit_code() as i32);
 
         #[cfg(target_os = "macos")]
         {
@@ -368,12 +382,12 @@ async fn start_pty_run_inner(
             let _ = reader_handle.join();
         }
 
-        // 检测是否因输出超限被 kill（读取线程设置的标志）
-        let killed_by = if output_limit_flag_waiter.load(Ordering::Relaxed) {
-            Some("output_limit")
-        } else {
-            None
-        };
+        // 检测 kill 原因：输出超限优先，其次信号终止（如 SIGSEGV 越界访问）
+        let signal_name = wait_status.as_ref().and_then(|s| s.signal());
+        let killed_by = determine_kill_reason(
+            output_limit_flag_waiter.load(Ordering::Relaxed),
+            signal_name,
+        );
 
         // 若已被 stop_pty_run 取消，跳过 emit（stop_pty_run 已 emit 过 pty_exit）
         // 保证 pty_exit 单次 emit 语义，避免前端 onExit 被调用两次
@@ -505,5 +519,29 @@ mod tests {
         let r = StartPtyResult::CompileFailed { run_id: "abc".into(), stderr: "e".into() };
         let json = serde_json::to_string(&r).unwrap();
         assert_eq!(json, r#"{"status":"compile_failed","run_id":"abc","stderr":"e"}"#);
+    }
+
+    #[test]
+    fn determine_kill_reason_none_when_normal() {
+        assert_eq!(determine_kill_reason(false, None), None);
+    }
+
+    #[test]
+    fn determine_kill_reason_output_limit_takes_priority() {
+        // 输出超限优先于信号（读取线程主动 kill 可能附带信号）
+        assert_eq!(
+            determine_kill_reason(true, Some("Segmentation fault")),
+            Some("output_limit")
+        );
+    }
+
+    #[test]
+    fn determine_kill_reason_signal_when_no_output_limit() {
+        assert_eq!(
+            determine_kill_reason(false, Some("Segmentation fault")),
+            Some("signal")
+        );
+        // 空字符串不算信号
+        assert_eq!(determine_kill_reason(false, Some("")), None);
     }
 }

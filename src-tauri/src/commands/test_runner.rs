@@ -100,7 +100,14 @@ fn normalize_output(s: &str, strict: bool) -> String {
     if strict {
         s
     } else {
-        s.trim_end_matches('\n').to_string()
+        // 非严格模式：去掉每行行尾空白（空格/tab）+ 整串末尾换行
+        // 教学场景：行末空白和换行不应影响判定，对齐主流 OJ 行为
+        s.split('\n')
+            .map(|line| line.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_end_matches('\n')
+            .to_string()
     }
 }
 
@@ -487,6 +494,19 @@ mod tests {
         assert_eq!(normalize_output("hello\n\n\n", false), "hello");
         assert_eq!(normalize_output("a\nb\n", false), "a\nb");
         assert_eq!(normalize_output("a\r\nb\r\n", false), "a\nb");
+        // 末尾换行 + 末尾空格/tab 混合
+        assert_eq!(normalize_output("hello   \n", false), "hello");
+        assert_eq!(normalize_output("hello\t\n", false), "hello");
+    }
+
+    #[test]
+    fn normalize_default_trims_trailing_whitespace_per_line() {
+        // 每行行尾空格被去除，行内空格保留
+        assert_eq!(normalize_output("a   \nb   \n", false), "a\nb");
+        assert_eq!(normalize_output("a   b   \n", false), "a   b");
+        assert_eq!(normalize_output("  \n  \n", false), "");
+        // 无末尾换行时每行行尾空格同样去除
+        assert_eq!(normalize_output("a   \nb   ", false), "a\nb");
     }
 
     #[test]

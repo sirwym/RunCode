@@ -440,7 +440,7 @@ describe("事件委托", () => {
     });
     await new Promise((r) => setTimeout(r, 50));
 
-    fireEvent.click(document.querySelector("text") as HTMLElement);
+    fireEvent.click(document.querySelector("text") as Element);
 
     expect(onNodeClick).not.toHaveBeenCalled();
   });

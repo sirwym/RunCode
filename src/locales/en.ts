@@ -37,6 +37,7 @@ export const en = {
     signal: "Killed by signal",
     cancelled: "Cancelled",
     outputLimit: "Output limit (killed)",
+    signalTerminated: "Process terminated by signal (possible crash)",
   },
   tests: {
     title: "Multi-Case Tests",
