@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useTestSuite } from "../hooks/useTestSuite";
 import { useRunManager } from "../hooks/useRunManager";
@@ -28,14 +28,14 @@ interface CardProps {
   result: TestCaseResult | undefined;
   isCurrent: boolean; // 是否为当前正在运行的用例
   selected: boolean; // 是否选中参与多样例测试
-  onToggleSelected: () => void;
+  onToggleSelected: (id: string) => void;
   selectionDisabled: boolean; // 运行中禁用选中切换
-  onUpdate: (patch: { name?: string; input?: string; expected?: string; strict?: boolean }) => void;
-  onRemove: () => void;
-  onCompare: () => void;
+  onUpdate: (id: string, patch: { name?: string; input?: string; expected?: string; strict?: boolean }) => void;
+  onRemove: (id: string) => void;
+  onCompare: (id: string, name: string) => void;
 }
 
-function TestCaseCard({
+const TestCaseCard = memo(function TestCaseCard({
   index,
   preview,
   result,
@@ -68,10 +68,10 @@ function TestCaseCard({
       const patch = pendingRef.current;
       pendingRef.current = {};
       if (Object.keys(patch).length > 0) {
-        onUpdate(patch);
+        onUpdate(preview.id, patch);
       }
     };
-  }, [onUpdate]);
+  }, [onUpdate, preview.id]);
 
   // 防抖提交：500ms 内无新输入才触发 onUpdate
   const scheduleUpdate = useCallback(() => {
@@ -80,10 +80,10 @@ function TestCaseCard({
       const patch = pendingRef.current;
       pendingRef.current = {};
       if (Object.keys(patch).length > 0) {
-        onUpdate(patch);
+        onUpdate(preview.id, patch);
       }
     }, 500);
-  }, [onUpdate]);
+  }, [onUpdate, preview.id]);
 
   // blur 时立即提交（不等防抖），保证切走焦点后后端尽快同步
   const flushUpdate = useCallback(() => {
@@ -94,9 +94,9 @@ function TestCaseCard({
     const patch = pendingRef.current;
     pendingRef.current = {};
     if (Object.keys(patch).length > 0) {
-      onUpdate(patch);
+      onUpdate(preview.id, patch);
     }
-  }, [onUpdate]);
+  }, [onUpdate, preview.id]);
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setLocalName(e.target.value);
@@ -133,7 +133,7 @@ function TestCaseCard({
           <input
             type="checkbox"
             checked={selected}
-            onChange={onToggleSelected}
+            onChange={() => onToggleSelected(preview.id)}
             disabled={selectionDisabled}
           />
         </label>
@@ -156,7 +156,7 @@ function TestCaseCard({
         )}
         {isCurrent && <span className="testcase-running-dot" />}
         <span className="testcase-spacer" />
-        <button className="btn-icon" onClick={onRemove} title={t("tests.remove")}>
+        <button className="btn-icon" onClick={() => onRemove(preview.id)} title={t("tests.remove")}>
           <X size={12} />
         </button>
       </div>
@@ -233,7 +233,7 @@ function TestCaseCard({
           )}
           <button
             className="btn btn-secondary btn-sm"
-            onClick={onCompare}
+            onClick={() => onCompare(preview.id, preview.name)}
             title={t("tests.compareDiff")}
           >
             <GitCompare size={12} />
@@ -256,7 +256,7 @@ function TestCaseCard({
       )}
     </div>
   );
-}
+});
 
 interface PanelProps {
   onRunTests: () => void;
@@ -392,6 +392,12 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
     }
   }, [importCases, strict]);
 
+  // 稳定回调：传给 TestCaseCard，配合 React.memo 避免不必要的重渲染
+  const handleToggleSelected = useCallback((id: string) => toggleCaseSelection(id), [toggleCaseSelection]);
+  const handleUpdate = useCallback((id: string, patch: { name?: string; input?: string; expected?: string; strict?: boolean }) => updateCase(id, patch), [updateCase]);
+  const handleRemove = useCallback((id: string) => removeCase(id), [removeCase]);
+  const handleCompareCard = useCallback((id: string, name: string) => { void handleCompare(id, name); }, [handleCompare]);
+
   return (
     <section className="testcases-panel">
       <div className="testcases-header">
@@ -523,11 +529,11 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
                 testProgress.case_id === pv.id
               }
               selected={!deselectedSet.has(pv.id)}
-              onToggleSelected={() => toggleCaseSelection(pv.id)}
+              onToggleSelected={handleToggleSelected}
               selectionDisabled={isRunning}
-              onUpdate={(patch) => updateCase(pv.id, patch)}
-              onRemove={() => removeCase(pv.id)}
-              onCompare={() => void handleCompare(pv.id, pv.name)}
+              onUpdate={handleUpdate}
+              onRemove={handleRemove}
+              onCompare={handleCompareCard}
             />
           ))
         )}

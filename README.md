@@ -23,6 +23,7 @@
 - **时间限制判定** — 单例超时判失败（OI 友好，默认 1000ms，可配置）
 - **实时终端** — PTY 终端支持交互式输入（macOS forkpty / Windows ConPTY）
 - **代码格式化** — tree-sitter 解析 + 内置 formatter
+- **控制流图可视化** — 将 C++ 函数的 if/else/for/while/switch 控制流自动渲染为 Mermaid 流程图，点击节点跳转对应代码行
 - **Lyra 全直角风格** — Graphite 中性灰 + RunCode Slate 品牌交互色，UI 与代码统一 JetBrains Mono（详见 [ADR-0006](docs/adr/0006-runcode-brand-color-system.md)）
 - **中英文界面切换** — 编辑器界面支持中 / 英双语
 - **主题切换** — Dark / Light / System 跟随系统，支持自定义图片主题

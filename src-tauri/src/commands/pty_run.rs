@@ -491,6 +491,14 @@ async fn start_pty_run_inner(
 
         // 限时排空读取线程（见 drain_reader_with_timeout 文档）
         if drain_reader_with_timeout(&reader_handle, Duration::from_millis(500)) {
+            // reader 已自然退出（Unix EOF 或 ConPTY 已关闭）：join 确保所有 pty_output 已 emit
+            let _ = reader_handle.join();
+        } else {
+            // Windows ConPTY: reader 阻塞在 read()，先 drop master 强制 reader 退出，
+            // 再 join 确保 reader 的所有 pty_output 在 pty_exit 之前 emit 完毕。
+            if let Some(pm) = app_waiter.try_state::<PtyManager>() {
+                pm.remove(&run_id_waiter);
+            }
             let _ = reader_handle.join();
         }
 
@@ -515,7 +523,7 @@ async fn start_pty_run_inner(
             );
         }
 
-        // 清理 RunManager + PtyManager（通过 AppHandle 获取 State）
+        // 清理 RunManager + PtyManager（pm.remove 幂等：else 分支可能已 remove）
         if let Some(rm) = app_waiter.try_state::<RunManager>() {
             rm.complete(&run_id_waiter);
         }

@@ -36,12 +36,13 @@ RunCode 是一个**轻量级跨平台 C++ 教学编辑器**（macOS + Windows）
 - Lyra 全直角 UI 风格（Graphite 中性灰 + RunCode Slate 品牌色）
 - 中英文界面切换、Dark / Light / System / 自定义图片主题
 - C++ 速查表（内置 STL / 算法 / DP / 图论常用片段）
+- 控制流图可视化（tree-sitter 解析 C++ 函数 AST → 生成 Mermaid 流程图，点击节点跳转代码行）
 
 ### 1.2 技术栈
 
 | 层 | 技术 |
 |---|---|
-| 前端 | React 19 + TypeScript 5.8 + Vite 7 + Tailwind 4 + Zustand 4 + lucide-react 1.26 + Monaco Editor 0.52 + react-resizable-panels 2.1 + Radix UI + xterm 6 |
+| 前端 | React 19 + TypeScript 5.8 + Vite 7 + Tailwind 4 + Zustand 4 + lucide-react 1.26 + Monaco Editor 0.52 + react-resizable-panels 2.1 + Radix UI + xterm 6 + mermaid（懒加载，控制流图渲染） |
 | 后端 | Rust 2021 edition + Tauri 2 + tokio + portable-pty + tree-sitter + serde + zip + walkdir + windows crate（Windows 平台 JobObject） |
 | 测试 | Vitest 4.1（前端）+ cargo test（后端） |
 | 打包 | Tauri bundler（macOS DMG + Windows NSIS） |
@@ -71,6 +72,7 @@ RunCode/
 │   │   ├── SettingsPanel.tsx     # 设置面板
 │   │   ├── CheatsheetDialog.tsx  # C++ 速查表弹窗
 │   │   ├── DiffDialog.tsx        # 差异对比弹窗
+│   │   ├── FlowchartPanel.tsx    # 控制流图面板
 │   │   ├── RecentFilesDialog.tsx # 最近文件弹窗
 │   │   └── CustomThemePreview.tsx
 │   ├── hooks/                    # Zustand store hooks
@@ -88,7 +90,10 @@ RunCode/
 │   ├── src/
 │   │   ├── commands/             # Tauri commands（前端 invoke 入口）
 │   │   ├── runner/               # 进程执行与资源限制（跨平台分发）
-│   │   ├── parser/               # tree-sitter 代码解析
+│   │   ├── parser/               # tree-sitter 代码解析（含 CFG 生成）
+│   │   │   ├── mod.rs            # 解析基础设施
+│   │   │   ├── formatter.rs      # 代码格式化
+│   │   │   └── cfg.rs            # 控制流图（CFG）生成
 │   │   ├── config.rs             # 编译器与运行配置
 │   │   ├── error.rs              # 错误类型定义
 │   │   ├── formatter.rs          # 代码格式化器
@@ -310,6 +315,15 @@ RunCode 前后端通过两种机制通信：
 - 通过 `invoke("write_pty_stdin", { runId, data })` 发送用户输入
 - 处理 resize（FitAddon）
 - 右键菜单：复制 / 粘贴 / 全选 / 清空
+
+#### [FlowchartPanel.tsx](../src/components/FlowchartPanel.tsx)
+
+控制流图可视化面板。主要职责：
+
+- 调用 `invoke("generate_cfg", { code })` 获取 Mermaid 流程图文本与节点列表
+- 懒加载 `mermaid` 库（首次渲染时动态 import），渲染 Mermaid 流程图
+- 点击节点触发 `onJumpToLine(line)` 回调，跳转编辑器到对应代码行
+- Mermaid 渲染使用 `useEffect` + `ref.innerHTML`（避免 `dangerouslySetInnerHTML` 在 transform 更新时重建 DOM 导致性能问题与点击失效）
 
 #### [TestCasesPanel.tsx](../src/components/TestCasesPanel.tsx)
 
@@ -547,7 +561,7 @@ JetBrains Mono Variable 字体 `@font-face` 声明（仅 Latin 子集，减小�
 
 #### [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json)
 
-应用配置。`productName = "RunCode"`，`identifier = "com.cppide.teach"`，`version = "0.1.2"`。
+应用配置。`productName = "RunCode"`，`identifier = "com.cppide.teach"`，`version = "1.0.2"`。
 
 - 窗口：1200×800，最小 800×600，`titleBarStyle = "Overlay"` + `hiddenTitle = true` + `decorations = true` + `visible = false`（启动时隐藏，等自定义标题栏激活后再 show）
 - CSP：严格 `default-src 'self'`，style 允许 `tauri-plugin-decoration` + `unsafe-inline`，img 允许 `asset:` 协议，`assetProtocol.scope = ["$APPDATA/custom_themes/**"]`
@@ -639,7 +653,7 @@ PTY 进程管理（与 RunManager 配合）。
   - `killer: Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>`（stop 用，避免与 wait 竞争锁）
   - `pid: Option<u32>`（Unix 用于 `kill(-pid)` 杀进程组，Windows 用于查询内存峰值）
   - `_work_dir: TempDir`（drop 时自动清理）
-  - `pub fn write_stdin(data)` / `pub fn resize(cols, rows)` / `pub fn kill()` — Unix 优先 `kill(-pid, SIGKILL)` 杀整个进程组（含孙进程），killer.kill() 兜底
+  - `pub fn write_stdin(data)` / `pub fn resize(cols, rows)` / `pub fn kill()` — Unix 优先 `kill(-pid, SIGKILL)` 杀整个进程组（含孙进程），killer.kill() 兜底；Windows 优先 `TerminateProcess` 终止子进程，`is_process_alive` 检查存活状态，killer.kill() 兜底
 - `struct PtyManager`：
   - `sessions: Mutex<HashMap<String, PtySession>>`
   - `first_input_emitted: Mutex<HashSet<String>>` — `pty_first_input` 事件去重
@@ -750,7 +764,7 @@ PTY 交互运行命令。`MAX_PTY_OUTPUT_BYTES = 50MB`（超过自动 kill）。
 
 命令：
 
-- `start_pty_run(code, run_id, app, run_manager, pty_manager)` — 流程：注册 RunManager → 编译 → 编译失败返回 CompileFailed → 创建 PTY spawn 子进程 → 读取线程（blocking read → emit pty_output，累计 50MB 上限超限触发 kill）→ 等待线程（child.wait() → 限时排空读取线程 → emit pty_exit + 清理）。macOS/Windows 都有内存轮询线程（100ms 间隔）
+- `start_pty_run(code, run_id, app, run_manager, pty_manager)` — 流程：注册 RunManager → 编译 → 编译失败返回 CompileFailed → 创建 PTY spawn 子进程 → 读取线程（blocking read → emit pty_output，累计 50MB 上限超限触发 kill）→ 等待线程（child.wait() → drain_reader_with_timeout 排空 → drop master 强制 reader 退出 → join reader → emit pty_exit + 清理）。macOS/Windows 都有内存轮询线程（100ms 间隔）
 - `write_pty_stdin(run_id, data, pty_manager, app)` — 首次输入时 emit `pty_first_input`（只 emit 一次）
 - `resize_pty(run_id, cols, rows, pty_manager)`
 - `stop_pty_run(run_id, app, run_manager, pty_manager)` — kill PTY 子进程 → cancel RunManager → mark_cancelled（等待线程检测后跳过 emit，保证 pty_exit 单次 emit）→ 清理 → emit pty_exit(killed_by="cancelled")
@@ -795,6 +809,7 @@ PTY 交互运行命令。`MAX_PTY_OUTPUT_BYTES = 50MB`（超过自动 kill）。
 #### [parser_cmd.rs](../src-tauri/src/commands/parser_cmd.rs)
 
 - `extract_code_symbols(code)` — 用于代码补全 L2。tree-sitter 解析是 CPU 密集型，spawn_blocking
+- `generate_cfg(code)` — 生成控制流图（CFG）。tree-sitter 解析函数 AST → 构建基本块与边 → 输出 Mermaid 流程图文本 + 节点列表（含行号，供前端点击跳转）。spawn_blocking
 
 #### [menu_cmd.rs](../src-tauri/src/commands/menu_cmd.rs)
 
@@ -827,6 +842,7 @@ PTY 交互运行命令。`MAX_PTY_OUTPUT_BYTES = 50MB`（超过自动 kill）。
 输出收集与标准化。`MAX_OUTPUT_BYTES = 1MB`。
 
 - `pub async fn read_until_limit<R: AsyncRead + Unpin>(reader, max_bytes) -> io::Result<(Vec<u8>, bool)>` — 读取管道到 Vec\<u8\>，累计到 max_bytes 后停止，返回 (字节, 是否被截断)。8KB 块读取
+- `pub async fn read_until_limit_shared<R: AsyncRead + Unpin>(reader, max_bytes, buf: Arc<Mutex<Vec<u8>>>, truncated: Arc<AtomicBool>)` — 共享缓冲区版本，写入外部 Arc\<Mutex\> 而非返回 Vec。用于 Windows 进程被 kill 后超时读取管道：即使超时也能从共享缓冲区获取部分数据，避免丢失已读输出
 
 #### [unix.rs](../src-tauri/src/runner/unix.rs) — macOS/Linux 实现
 
@@ -851,6 +867,9 @@ PTY 交互运行命令。`MAX_PTY_OUTPUT_BYTES = 50MB`（超过自动 kill）。
 - 内存采集用 `GetProcessMemoryInfo` 轮询 `PeakWorkingSetSize`（100ms 间隔）
 - 进程组 kill 用 `TerminateJobObject`
 - `AssignProcessToJobObject` 失败时降级（仅墙钟超时可用），返回 `job_object_degraded = true`
+- `ExitFlagGuard`（RAII）：future 被 cancel 时自动设置 `exit_flag=true`，防止内存轮询线程无限循环（与 unix.rs 一致）
+- `SendHandle`（RAII）：实现 `Drop` trait 自动调用 `CloseHandle`，消除所有提前返回路径的句柄泄漏风险
+- 输出收集使用 `read_until_limit_shared`（共享缓冲区），进程被 kill 后超时仍可获取部分输出
 
 关键导出（供 `commands/pty_run.rs` 复用）：
 
@@ -881,6 +900,16 @@ tree-sitter 解析基础设施。
   - `fn normalize_braces` / `fn normalize_keywords` / `fn trim_trailing_ws` / `fn collapse_blank_lines`
 
 `INDENT_UNIT = "    "`（4 空格）。
+
+#### [cfg.rs](../src-tauri/src/parser/cfg.rs)
+
+基于 tree-sitter AST 的 C++ 控制流图（CFG）生成器。将函数体内的 if/else/for/while/switch 控制流结构转换为 Mermaid 流程图。
+
+- `struct CfgResult`（serde）：`mermaid: String`（Mermaid 流程图文本）/ `nodes: Vec<CfgNode>` / `edges: Vec<CfgEdge>`
+- `struct CfgNode`（serde）：`id: String` / `label: String` / `line: u32`（1-based，供前端点击跳转）/ `node_type: NodeType`
+- `enum NodeType`（serde snake_case）：`normal` / `decision`（if/switch 条件分支）/ `terminal`（return/exit）
+- `struct CfgEdge`（serde）：`from: String` / `to: String` / `label: Option<String>`（分支标签如 "true"/"false"）
+- `pub fn generate_cfg(code: String) -> Result<CfgResult, String>` — 解析 C++ 代码 → 取第一个函数定义 → `CfgBuilder` 遍历 AST 节点构建基本块与边 → 生成 Mermaid 文本
 
 ---
 
@@ -1107,6 +1136,7 @@ main.rs
 | `AppSettings` 及子结构 | 同名 | [settings.rs](../src-tauri/src/settings.rs) |
 | `RecentEntry` | `RecentEntry` | [recent_files.rs](../src-tauri/src/recent_files.rs) |
 | `FormatResult` | `FormatResult` | [formatter.rs](../src-tauri/src/formatter.rs) |
+| `CfgResult` / `CfgNode` / `CfgEdge` | 同名 | [parser/cfg.rs](../src-tauri/src/parser/cfg.rs) |
 
 ---
 
@@ -1190,7 +1220,7 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 ./scripts/build-signed.sh
 ```
 
-- 产物：`src-tauri/target/release/bundle/dmg/RunCode_0.1.2_{arch}.dmg`
+- 产物：`src-tauri/target/release/bundle/dmg/RunCode_1.0.2_{arch}.dmg`
 - 体积：~10MB 级
 - 签名方式：默认 ad-hoc（`signingIdentity: "-"`），正式分发需配置 Apple Developer 账号 + 环境变量（`APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID`）
 - Hardened Runtime：通过 [entitlements.plist](../src-tauri/entitlements.plist) 启用
@@ -1201,7 +1231,7 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 ./scripts/build-windows.ps1
 ```
 
-- 产物：`src-tauri/target/release/bundle/nsis/RunCode_0.1.2_x64-setup.exe`
+- 产物：`src-tauri/target/release/bundle/nsis/RunCode_1.0.2_x64-setup.exe`
 - 体积：~40 MB（NSIS LZMA 压缩后；TDM-GCC 原始资源约 280MB 压缩至 ~30MB + RunCode ~10MB）。安装后展开约 290 MB
 - TDM-GCC 已内置并提交到仓库，clone 后即用
 - WebView2 Runtime：使用 `downloadBootstrapper` 模式，首次安装需联网下载（约 2MB）。离线机房需提前预装 WebView2 Runtime
@@ -1264,7 +1294,7 @@ Windows 特殊处理：`strip_verbatim_prefix(path)` 去掉 `\\?\` 前缀，解�
 | 维度 | Unix | Windows |
 |---|---|---|
 | 底层实现 | `portable-pty`（forkpty） | `portable-pty`（ConPTY） |
-| PTY kill | `kill(-pid, SIGKILL)` 杀整个进程组 | `killer.kill()` 兜底（ConPTY 已提供基本隔离） |
+| PTY kill | `kill(-pid, SIGKILL)` 杀整个进程组 | `TerminateProcess` 优先 → `is_process_alive` 检查 → `killer.kill()` 兜底 |
 | PTY 读取线程退出 | 子进程退出后 read 返回 EOF，线程快速结束 | ConPTY 子进程退出后不返回 EOF，需 `drain_reader_with_timeout` 限时等待 |
 | 内存轮询 | macOS `proc_pid_rusage` / Linux RUSAGE_CHILDREN | `GetProcessMemoryInfo` |
 
@@ -1356,4 +1386,4 @@ RunCode 以当前用户权限执行本地 C++ 代码，**不是恶意代码沙�
 
 ---
 
-> 本文档基于 RunCode v0.1.2 代码库生成。如有疑问或发现文档与代码不一致，请以代码为准并提 issue 修正文档。
+> 本文档基于 RunCode v1.0.2 代码库生成。如有疑问或发现文档与代码不一致，请以代码为准并提 issue 修正文档。

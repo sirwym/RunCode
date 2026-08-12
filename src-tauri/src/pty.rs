@@ -96,6 +96,23 @@ impl PtySession {
                 // kill 失败（进程已退出或权限不足），回退到 killer
             }
         }
+        // Windows：portable_pty 的 killer.kill() 在 ConPTY 下可能不生效，
+        // 用 TerminateProcess 直接终止进程作为主要手段。
+        #[cfg(windows)]
+        {
+            if let Some(pid) = self.pid {
+                use windows::Win32::Foundation::CloseHandle;
+                use windows::Win32::System::Threading::{
+                    OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+                };
+                unsafe {
+                    if let Ok(h_process) = OpenProcess(PROCESS_TERMINATE, false, pid) {
+                        let _ = TerminateProcess(h_process, 1);
+                        let _ = CloseHandle(h_process);
+                    }
+                }
+            }
+        }
         if let Ok(mut killer) = self.killer.lock() {
             if let Some(mut k) = killer.take() {
                 let _ = k.kill();
@@ -231,7 +248,8 @@ mod tests {
     use portable_pty::{native_pty_system, CommandBuilder, PtySize};
     use std::time::{Duration, Instant};
 
-    /// 构造一个真实的 PtySession，spawn 一个长时间运行的子进程（sleep 30）。
+    /// 构造一个真实的 PtySession，spawn 一个长时间运行的子进程。
+    /// Unix: sleep 30；Windows: ping -n 31 127.0.0.1（约 30 秒）。
     /// 用于测试 kill / kill_all 是否能正确杀掉子进程。
     fn spawn_sleep_session(label: &str) -> (PtySession, Box<dyn portable_pty::Child + Send>) {
         let pty_system = native_pty_system();
@@ -244,8 +262,20 @@ mod tests {
             })
             .expect("openpty failed");
 
-        let mut cmd = CommandBuilder::new("sleep");
-        cmd.arg("30");
+        #[cfg(unix)]
+        let cmd = {
+            let mut c = CommandBuilder::new("sleep");
+            c.arg("30");
+            c
+        };
+        #[cfg(windows)]
+        let cmd = {
+            let mut c = CommandBuilder::new("ping");
+            c.arg("-n");
+            c.arg("31");
+            c.arg("127.0.0.1");
+            c
+        };
         let child = pair.slave.spawn_command(cmd).expect("spawn failed");
         let pid = child.process_id();
         drop(pair.slave);
@@ -265,18 +295,48 @@ mod tests {
 
     /// 等待 child 退出，最多等 timeout。返回 true 表示已退出。
     fn wait_child_exit(child: &mut Box<dyn portable_pty::Child + Send>, timeout: Duration) -> bool {
+        let pid = child.process_id();
         let deadline = Instant::now() + timeout;
         loop {
+            // Windows ConPTY: try_wait() 可能阻塞且不检测外部 TerminateProcess 终止的进程，
+            // 优先用 GetExitCodeProcess 检查进程状态。
+            #[cfg(windows)]
+            {
+                if let Some(pid) = pid {
+                    if !is_process_alive(pid) {
+                        return true;
+                    }
+                }
+            }
             // try_wait 非阻塞：Some(status) 表示已退出，None 表示仍在运行
             match child.try_wait() {
                 Ok(Some(_)) => return true,
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        return false;
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
-                }
+                Ok(None) => {}
                 Err(_) => return true, // wait 出错视为已退出
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Windows 专用：通过 GetExitCodeProcess 检查进程是否仍在运行。
+    #[cfg(windows)]
+    fn is_process_alive(pid: u32) -> bool {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        const STILL_ACTIVE: u32 = 259;
+        unsafe {
+            if let Ok(h_process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+                let mut exit_code: u32 = 0;
+                let ok = GetExitCodeProcess(h_process, &mut exit_code);
+                let _ = CloseHandle(h_process);
+                ok.is_ok() && exit_code == STILL_ACTIVE
+            } else {
+                false // 无法打开进程说明已退出
             }
         }
     }
@@ -308,6 +368,15 @@ mod tests {
             .map(|s| s.len())
             .unwrap_or(0);
         assert_eq!(count, 2);
+
+        // Windows ConPTY: Child::Drop 和 MasterPty::Drop 会阻塞（wait 不检测外部终止），
+        // 用 forget 避免。进程已被 TerminateProcess 终止，无僵尸进程风险。
+        #[cfg(windows)]
+        {
+            std::mem::forget(child1);
+            std::mem::forget(child2);
+            std::mem::forget(manager);
+        }
     }
 
     #[test]
@@ -342,5 +411,13 @@ mod tests {
         // 清理：杀掉剩下的 keep 会话，避免子进程残留
         manager.kill("keep");
         let _ = wait_child_exit(&mut child1, Duration::from_secs(2));
+
+        // Windows ConPTY: 同上，forget 避免 Drop 阻塞
+        #[cfg(windows)]
+        {
+            std::mem::forget(child1);
+            std::mem::forget(child2);
+            std::mem::forget(manager);
+        }
     }
 }

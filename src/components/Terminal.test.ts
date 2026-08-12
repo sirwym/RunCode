@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { XTERM_DARK_THEME, XTERM_LIGHT_THEME, buildCustomXtermTheme, shouldDeferFlush } from "./Terminal";
+import { XTERM_DARK_THEME, XTERM_LIGHT_THEME, buildCustomXtermTheme, shouldDeferFlush, resolveTerminalKeyAction } from "./Terminal";
 import type { CustomThemeColors } from "../types";
 
 // 验证 xterm 主题与品牌令牌一致
@@ -229,5 +229,134 @@ describe("shouldDeferFlush 选区保活决策", () => {
 
   it("缓冲为 0 时返回 false（避免空 buffer 无限 rAF 循环）", () => {
     expect(shouldDeferFlush(true, 0)).toBe(false);
+  });
+});
+
+// 终端键盘快捷键平台差异测试
+// Windows: Ctrl+C (智能复制) / Ctrl+V (粘贴) / Ctrl+A (全选)
+// Mac: Ctrl+C (智能复制) / Ctrl+Shift+C (强制复制) / Ctrl+Shift+V (粘贴)
+describe("resolveTerminalKeyAction 终端快捷键判定", () => {
+  // 辅助：构造 KeyboardEvent 子集
+  const mk = (key: string, opts: Partial<Pick<KeyboardEvent, "ctrlKey" | "shiftKey" | "altKey" | "metaKey">> = {}) => ({
+    key,
+    ctrlKey: opts.ctrlKey ?? false,
+    shiftKey: opts.shiftKey ?? false,
+    altKey: opts.altKey ?? false,
+    metaKey: opts.metaKey ?? false,
+  });
+
+  describe("Ctrl+C 智能复制（两平台共享）", () => {
+    it("有选区时 → copy", () => {
+      const e = mk("c", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, false, true)).toBe("copy");
+      expect(resolveTerminalKeyAction(e, true, true)).toBe("copy");
+    });
+
+    it("无选区时 → none（放行发送 SIGINT）", () => {
+      const e = mk("c", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("none");
+      expect(resolveTerminalKeyAction(e, true, false)).toBe("none");
+    });
+
+    it("大写 C 同样匹配", () => {
+      const e = mk("C", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, false, true)).toBe("copy");
+    });
+
+    it("Ctrl+Shift+C 在两平台均不被此分支匹配（无 Shift 约束）", () => {
+      const e = mk("c", { ctrlKey: true, shiftKey: true });
+      // Mac 走 Ctrl+Shift+C 分支返回 "copy"，Windows 返回 "none"
+      expect(resolveTerminalKeyAction(e, true, false)).toBe("copy");
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("none");
+    });
+  });
+
+  describe("Mac 平台", () => {
+    it("Ctrl+Shift+C → copy（强制复制，无视选区）", () => {
+      const e = mk("c", { ctrlKey: true, shiftKey: true });
+      expect(resolveTerminalKeyAction(e, true, false)).toBe("copy");
+      expect(resolveTerminalKeyAction(e, true, true)).toBe("copy");
+    });
+
+    it("Ctrl+Shift+V → paste", () => {
+      const e = mk("v", { ctrlKey: true, shiftKey: true });
+      expect(resolveTerminalKeyAction(e, true, false)).toBe("paste");
+    });
+
+    it("Ctrl+V（无 Shift）→ none（Mac 不拦截，xterm 发送 \\x16）", () => {
+      const e = mk("v", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, true, false)).toBe("none");
+    });
+
+    it("Ctrl+A（无 Shift）→ none（Mac 不拦截，xterm 发送 \\x01）", () => {
+      const e = mk("a", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, true, false)).toBe("none");
+    });
+  });
+
+  describe("Windows 平台", () => {
+    it("Ctrl+V → paste", () => {
+      const e = mk("v", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("paste");
+    });
+
+    it("Ctrl+A → selectAll", () => {
+      const e = mk("a", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("selectAll");
+    });
+
+    it("Ctrl+Shift+C → none（Windows 不再拦截）", () => {
+      const e = mk("c", { ctrlKey: true, shiftKey: true });
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("none");
+    });
+
+    it("Ctrl+Shift+V → none（Windows 不再拦截）", () => {
+      const e = mk("v", { ctrlKey: true, shiftKey: true });
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("none");
+    });
+
+    it("Ctrl+Shift+A → none（Shift 修饰符阻止匹配）", () => {
+      const e = mk("a", { ctrlKey: true, shiftKey: true });
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("none");
+    });
+  });
+
+  describe("修饰符排除", () => {
+    it("Alt+Ctrl+C → none", () => {
+      const e = mk("c", { ctrlKey: true, altKey: true });
+      expect(resolveTerminalKeyAction(e, false, true)).toBe("none");
+    });
+
+    it("Meta+Ctrl+C → none", () => {
+      const e = mk("c", { ctrlKey: true, metaKey: true });
+      expect(resolveTerminalKeyAction(e, false, true)).toBe("none");
+    });
+
+    it("无修饰符的 C → none", () => {
+      const e = mk("c");
+      expect(resolveTerminalKeyAction(e, false, true)).toBe("none");
+    });
+
+    it("仅 Shift+C → none", () => {
+      const e = mk("c", { shiftKey: true });
+      expect(resolveTerminalKeyAction(e, false, true)).toBe("none");
+    });
+  });
+
+  describe("无关按键放行", () => {
+    it("Ctrl+X → none（不拦截剪切）", () => {
+      const e = mk("x", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("none");
+    });
+
+    it("Ctrl+S → none（不拦截保存）", () => {
+      const e = mk("s", { ctrlKey: true });
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("none");
+    });
+
+    it("普通字母 → none", () => {
+      const e = mk("z");
+      expect(resolveTerminalKeyAction(e, false, false)).toBe("none");
+    });
   });
 });

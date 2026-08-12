@@ -117,6 +117,50 @@ export function shouldDeferFlush(hasSelection: boolean, bufferSize: number): boo
     return hasSelection && bufferSize > 0 && bufferSize < MAX_DEFERRED_BUFFER_BYTES;
 }
 
+/// 终端键盘快捷键动作判定。
+/// 在 document capture phase keydown 监听器中调用，根据按键事件 + 平台 + 选区状态
+/// 判定应执行的操作。纯函数，便于单元测试。
+///
+/// 平台差异：
+/// - 共享：Ctrl+C（无 Shift）有选区时复制，无选区时放行让 xterm 发送 SIGINT
+/// - Mac：Ctrl+Shift+C 强制复制 / Ctrl+Shift+V 粘贴
+/// - Windows：Ctrl+V 粘贴 / Ctrl+A 全选
+///
+/// @param e            - KeyboardEvent 子集（ctrlKey/shiftKey/altKey/metaKey/key）
+/// @param isMac        - 是否 macOS 平台
+/// @param hasSelection - xterm 当前是否有选区
+/// @returns "copy" | "paste" | "selectAll" | "none"（none = 不拦截，放行给 xterm）
+export function resolveTerminalKeyAction(
+  e: Pick<KeyboardEvent, "ctrlKey" | "shiftKey" | "altKey" | "metaKey" | "key">,
+  isMac: boolean,
+  hasSelection: boolean,
+): "copy" | "paste" | "selectAll" | "none" {
+  const ctrl = e.ctrlKey && !e.altKey && !e.metaKey;
+
+  // Ctrl+C（无 Shift）：有选区时复制，无选区时放行（xterm 发送 \x03 SIGINT）
+  if (ctrl && !e.shiftKey && (e.key === "c" || e.key === "C")) {
+    return hasSelection ? "copy" : "none";
+  }
+
+  if (isMac) {
+    // Mac：Ctrl+Shift+C 强制复制 / Ctrl+Shift+V 粘贴
+    if (ctrl && e.shiftKey) {
+      if (e.key === "c" || e.key === "C") return "copy";
+      if (e.key === "v" || e.key === "V") return "paste";
+    }
+  } else {
+    // Windows：Ctrl+V 粘贴 / Ctrl+A 全选
+    // Ctrl+V 默认发送 \x16（readline verbatim），Ctrl+A 默认发送 \x01（readline 行首），
+    // 需在 document capture phase 拦截
+    if (ctrl && !e.shiftKey) {
+      if (e.key === "v" || e.key === "V") return "paste";
+      if (e.key === "a" || e.key === "A") return "selectAll";
+    }
+  }
+
+  return "none";
+}
+
 interface TerminalProps {
   runId: string | null; // PTY 会话 ID
   onExit: (exitCode: number | null, killedBy: string | null, maxRssKb: number | null) => void;
@@ -291,49 +335,53 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     textarea?.addEventListener("focus", handleFocus);
     textarea?.addEventListener("blur", handleBlur);
 
-    // 终端键盘快捷键：
-    // - Ctrl+C：有选区时复制，无选区时放行让 xterm 发送 SIGINT（^C）给子进程
-    // - Ctrl+Shift+C：强制复制选区（即使无选区也阻止默认行为）
-    // - Ctrl+Shift+V：粘贴
+    // 终端键盘快捷键（document 级 capture phase）：
+    // 必须在 document 层级拦截，因为 xterm.js 在 term.open() 时注册了 textarea 级
+    // capture-phase keydown 处理器，比后注册的 textarea 级处理器先执行。
+    // document capture phase 在所有元素之前触发，确保能在 xterm.js 之前拦截。
+    // - Ctrl+C（两平台）：有选区时复制（stopImmediatePropagation 阻止 xterm 发送 \x03），
+    //                     无选区时放行让 xterm 发送 SIGINT（^C）给子进程
+    // - Mac：Ctrl+Shift+C 强制复制 / Ctrl+Shift+V 粘贴
+    // - Windows：Ctrl+V 粘贴 / Ctrl+A 全选
+    //   （Ctrl+V 默认发送 \x16 readline verbatim，Ctrl+A 默认发送 \x01 readline 行首，
+    //    均需在 capture phase 拦截）
     const handleTerminalKeydown = (e: KeyboardEvent) => {
-      // 智能 Ctrl+C：有选区时拦截并复制，无选区时不拦截（xterm 发送 \x03）
-      if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === "C" || e.key === "c")) {
-        const sel = term.getSelection();
-        if (sel) {
-          e.preventDefault();
-          e.stopPropagation();
-          void handleCopyRef.current();
-        }
-        return;
-      }
-      if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey) {
-        if (e.key === "C" || e.key === "c") {
-          e.preventDefault();
-          e.stopPropagation();
-          void handleCopyRef.current();
-        } else if (e.key === "V" || e.key === "v") {
-          e.preventDefault();
-          e.stopPropagation();
-          void handlePasteRef.current();
-        }
+      // 只拦截终端 textarea 的键盘事件
+      if (e.target !== textarea) return;
+      const action = resolveTerminalKeyAction(e, isMac, term.hasSelection());
+      if (action === "none") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (action === "copy") {
+        void handleCopyRef.current();
+      } else if (action === "paste") {
+        void handlePasteRef.current();
+      } else if (action === "selectAll") {
+        term.selectAll();
       }
     };
-    textarea?.addEventListener("keydown", handleTerminalKeydown, true);
+    document.addEventListener("keydown", handleTerminalKeydown, true);
 
-    // 容器大小变化时自动 fit + 通知后端 resize
+    // 容器大小变化时自动 fit + 通知后端 resize（rAF 防抖避免同帧多次调用）
+    let rafId: number | null = null;
     const ro = new ResizeObserver(() => {
-      if (!fitRef.current || !termRef.current) return;
-      try {
-        fitRef.current.fit();
-      } catch {
-        // 忽略 fit 错误（容器未挂载等）
-      }
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        if (!fitRef.current || !termRef.current) return;
+        try {
+          fitRef.current.fit();
+        } catch {
+          // 忽略 fit 错误（容器未挂载等）
+        }
+      });
     });
     ro.observe(containerRef.current);
 
     return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
       ro.disconnect();
-      textarea?.removeEventListener("keydown", handleTerminalKeydown, true);
+      document.removeEventListener("keydown", handleTerminalKeydown, true);
       textarea?.removeEventListener("focus", handleFocus);
       textarea?.removeEventListener("blur", handleBlur);
       term.dispose();
@@ -533,12 +581,12 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
           <DropdownMenuItem disabled={!hasSelection} onClick={handleCopy}>
             <Copy className="h-3 w-3" />
             {t("panel.terminalMenu.copy")}
-            <kbd className="menu-shortcut">{isMac ? "⌘C" : "Ctrl+Shift+C"}</kbd>
+            <kbd className="menu-shortcut">{isMac ? "⌘C" : "Ctrl+C"}</kbd>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handlePaste}>
             <ClipboardPaste className="h-3 w-3" />
             {t("panel.terminalMenu.paste")}
-            <kbd className="menu-shortcut">{isMac ? "⌘V" : "Ctrl+Shift+V"}</kbd>
+            <kbd className="menu-shortcut">{isMac ? "⌘V" : "Ctrl+V"}</kbd>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handleSelectAll}>
             <BoxSelect className="h-3 w-3" />

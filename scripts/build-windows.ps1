@@ -8,7 +8,7 @@
 # TDM-GCC 已内置并提交到仓库（src-tauri/resources/tdm-gcc/），clone 后即用，无需额外准备。
 #
 # 用法：在 Windows 上执行 `./scripts/build-windows.ps1`
-# 产出：src-tauri/target/release/bundle/nsis/RunCode_0.1.2_x64-setup.exe
+# 产出：src-tauri/target/release/bundle/nsis/RunCode_1.0.2_x64-setup.exe
 
 set-strictmode -version latest
 $ErrorActionPreference = "stop"

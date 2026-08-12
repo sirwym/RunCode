@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import {
   PanelGroup,
@@ -367,7 +367,7 @@ function App() {
     handle.trigger(action);
   }, []);
 
-  const menuHandlers: Record<string, (val?: string) => void> = {
+  const menuHandlers: Record<string, (val?: string) => void> = useMemo(() => ({
     settings: () => setSettingsOpen(true),
     file_new: () => handlersRef.current.newTab("cpp"),
     file_open: () => void handlersRef.current.openTabDialog(),
@@ -452,7 +452,7 @@ function App() {
       });
     },
     help: () => setCheatsheetOpen(true),
-  };
+  }), [t, updateSettings, triggerEditorAction]);
 
   const menuHandlersRef = useRef(menuHandlers);
   menuHandlersRef.current = menuHandlers;
@@ -527,6 +527,7 @@ function App() {
   // 监听菜单事件（macOS 原生菜单触发；Windows 无原生菜单不触发）
   useEffect(() => {
     const unlistens: UnlistenFn[] = [];
+    let disposed = false;
     const setup = async () => {
       // 事件名 → handler key 映射
       const eventMap: Record<string, string> = {
@@ -554,20 +555,23 @@ function App() {
       };
 
       for (const [event, key] of Object.entries(eventMap)) {
-        unlistens.push(
-          await listen(event, () => menuHandlersRef.current[key]()),
-        );
+        const unlisten = await listen(event, () => menuHandlersRef.current[key]());
+        if (disposed) { unlisten(); return; }
+        unlistens.push(unlisten);
       }
 
       // layout 事件需要 payload（"horizontal"/"vertical"）
-      unlistens.push(
-        await listen<string>("menu-layout", (e) => {
-          menuHandlersRef.current["set_layout"](e.payload);
-        }),
-      );
+      const unlistenLayout = await listen<string>("menu-layout", (e) => {
+        menuHandlersRef.current["set_layout"](e.payload);
+      });
+      if (disposed) { unlistenLayout(); return; }
+      unlistens.push(unlistenLayout);
     };
     void setup();
-    return () => unlistens.forEach((u) => u());
+    return () => {
+      disposed = true;
+      unlistens.forEach((u) => u());
+    };
   }, []);
 
   // 窗口标题栏激活：macOS 直接显示；Windows 激活插件后显示
@@ -819,15 +823,19 @@ function App() {
   // 监听 PTY 首次输入事件：重置计时起点为用户首次输入时刻
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let disposed = false;
     const setup = async () => {
-      unlisten = await listen<string>("pty_first_input", (e) => {
+      const ul = await listen<string>("pty_first_input", (e) => {
         if (e.payload === useRunManager.getState().activeRunId) {
           useRunManager.getState().markPtyFirstInput();
         }
       });
+      if (disposed) { ul(); return; }
+      unlisten = ul;
     };
     void setup();
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
     };
   }, []);

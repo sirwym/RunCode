@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::AppError;
 use crate::runner::executor::{KillReason, RunOutput};
 use crate::runner::limits::ResourceLimits;
-use crate::runner::output::{read_until_limit, MAX_OUTPUT_BYTES};
+use crate::runner::output::{read_until_limit_shared, MAX_OUTPUT_BYTES};
 
 /// 带资源限制、超时与取消的执行核心（Windows 实现）。
 ///
@@ -83,19 +83,42 @@ pub async fn run_with_limits(
     }
 
     // 取出 stdout/stderr 句柄，让 child.wait() 不被管道阻塞
-    let mut stdout = child.stdout.take().expect("stdout 已设为 piped");
-    let mut stderr = child.stderr.take().expect("stderr 已设为 piped");
+    let stdout = child.stdout.take().expect("stdout 已设为 piped");
+    let stderr = child.stderr.take().expect("stderr 已设为 piped");
 
-    // 独立任务读两路输出
-    let stdout_task =
-        tokio::spawn(async move { read_until_limit(&mut stdout, MAX_OUTPUT_BYTES).await });
-    let stderr_task =
-        tokio::spawn(async move { read_until_limit(&mut stderr, MAX_OUTPUT_BYTES).await });
+    // 独立任务读两路输出（共享缓冲区：超时后仍能获取已读数据）
+    let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::with_capacity(8 * 1024)));
+    let stdout_trunc = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::with_capacity(8 * 1024)));
+    let stderr_trunc = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let stdout_task = tokio::spawn(read_until_limit_shared(
+        stdout,
+        MAX_OUTPUT_BYTES,
+        stdout_buf.clone(),
+        stdout_trunc.clone(),
+    ));
+    let stderr_task = tokio::spawn(read_until_limit_shared(
+        stderr,
+        MAX_OUTPUT_BYTES,
+        stderr_buf.clone(),
+        stderr_trunc.clone(),
+    ));
 
     // 后台线程轮询内存峰值
     let (mem_tx, mem_rx) = std::sync::mpsc::channel::<u64>();
     let exit_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let exit_flag_clone = exit_flag.clone();
+
+    // Drop guard: future 被 cancel 时设置 exit_flag，避免轮询线程泄漏
+    struct ExitFlagGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for ExitFlagGuard {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let _guard = ExitFlagGuard(exit_flag.clone());
+
     std::thread::spawn(move || {
         let mut max_rss = 0u64;
         while !exit_flag_clone.load(std::sync::atomic::Ordering::Relaxed) {
@@ -159,23 +182,22 @@ pub async fn run_with_limits(
 
     // 等输出读取任务结束
     // 超时保护：进程被杀后其子进程可能仍持有管道句柄，导致 task 无法读到 EOF
-    let (stdout_bytes, stdout_trunc) = match tokio::time::timeout(
-        Duration::from_millis(500),
-        stdout_task,
-    )
-    .await
-    {
-        Ok(Ok(r)) => r?,
-        _ => (Vec::new(), false),
+    // 超时后从共享缓冲区获取已读数据，而非丢弃
+    let _ = tokio::time::timeout(Duration::from_millis(500), stdout_task).await;
+    let (stdout_bytes, stdout_trunc_v) = {
+        let mut state = stdout_buf.lock().unwrap();
+        (
+            std::mem::take(&mut *state),
+            stdout_trunc.load(std::sync::atomic::Ordering::Relaxed),
+        )
     };
-    let (stderr_bytes, stderr_trunc) = match tokio::time::timeout(
-        Duration::from_millis(500),
-        stderr_task,
-    )
-    .await
-    {
-        Ok(Ok(r)) => r?,
-        _ => (Vec::new(), false),
+    let _ = tokio::time::timeout(Duration::from_millis(500), stderr_task).await;
+    let (stderr_bytes, stderr_trunc_v) = {
+        let mut state = stderr_buf.lock().unwrap();
+        (
+            std::mem::take(&mut *state),
+            stderr_trunc.load(std::sync::atomic::Ordering::Relaxed),
+        )
     };
 
     // 解析退出码
@@ -191,8 +213,7 @@ pub async fn run_with_limits(
         killed_by = Some(KillReason::Signal);
     }
 
-    // 关闭 JobObject 句柄（KILL_ON_JOB_CLOSE 会确保子进程已被杀）
-    close_handle(h_job.0);
+    // h_job 在函数返回时由 SendHandle::Drop 自动关闭（KILL_ON_JOB_CLOSE 确保子进程已被杀）
 
     Ok(RunOutput {
         exit_code,
@@ -200,7 +221,7 @@ pub async fn run_with_limits(
         stderr: stderr_bytes,
         duration_ms: start.elapsed().as_millis() as u64,
         killed_by,
-        truncated: stdout_trunc || stderr_trunc,
+        truncated: stdout_trunc_v || stderr_trunc_v,
         max_rss_kb,
         job_object_degraded,
     })
@@ -222,6 +243,14 @@ use windows::Win32::System::Threading::PROCESS_QUERY_INFORMATION;
 /// JobObject 句柄在单线程内使用，仅用于让 async future 满足 Send 约束。
 struct SendHandle(HANDLE);
 unsafe impl Send for SendHandle {}
+impl Drop for SendHandle {
+    fn drop(&mut self) {
+        // KILL_ON_JOB_CLOSE 确保句柄关闭时杀掉 JobObject 内所有子进程
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
 
 /// 创建 JobObject 并设置 CPU 时间限制
 fn create_job_with_limits(cpu_secs: u64) -> Result<SendHandle, AppError> {
@@ -287,13 +316,6 @@ fn terminate_job(h_job: HANDLE) {
     }
 }
 
-/// 关闭句柄
-fn close_handle(h: HANDLE) {
-    unsafe {
-        let _ = CloseHandle(h);
-    }
-}
-
 /// 查询进程内存峰值（KB）
 pub fn query_process_rss_kb(pid: u32) -> Option<u64> {
     use windows::Win32::System::Threading::OpenProcess;
@@ -325,6 +347,11 @@ mod tests {
         vec!["cmd".into(), "/c".into(), script.into()]
     }
 
+    /// 直接调用 ping.exe（避免 cmd /c 中间层的 quoting 问题）
+    fn ping_cmd() -> Vec<String> {
+        vec!["ping".into(), "-n".into(), "30".into(), "127.0.0.1".into()]
+    }
+
     fn limits() -> ResourceLimits {
         ResourceLimits {
             cpu_secs: 10,
@@ -353,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_kills_process() {
         let out = run_with_limits(
-            cmd_cmd("ping -n 30 127.0.0.1 > nul 2>nul"),
+            ping_cmd(),
             PathBuf::from(".").as_path(),
             None,
             Duration::from_millis(500),
@@ -381,7 +408,7 @@ mod tests {
         let token_clone = cancel_token.clone();
         let handle = tokio::spawn(async move {
             run_with_limits(
-                cmd_cmd("ping -n 30 127.0.0.1 > nul 2>nul"),
+                ping_cmd(),
                 PathBuf::from(".").as_path(),
                 None,
                 Duration::from_secs(30),
