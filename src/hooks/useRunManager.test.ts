@@ -665,3 +665,127 @@ describe("useRunManager stop 后旧请求覆盖守卫", () => {
     expect(stopCall).toBeDefined();
   });
 });
+
+// ============ compileRun / runTests 编译失败 compileError 统一接入测试 ============
+// 验证功能1a：compileRun 和 runTests 编译失败时也设置 compileError，
+// 与 startInteractive 行为一致，触发 Editor 行号定位。
+describe("useRunManager compileRun/runTests 编译失败 compileError 接入", () => {
+  function makeCompileFailedRunResult(): RunResult {
+    return {
+      run_id: "r-fail",
+      success: false,
+      stdout: "",
+      stderr: "main.cpp:3:5: error: expected ';' before '}' token",
+      exit_code: null,
+      duration_ms: 100,
+      killed_by: null,
+      truncated: false,
+      stage: "compile_failed",
+      max_rss_kb: 0,
+      job_object_degraded: false,
+    };
+  }
+
+  function makeCompileFailedTestRunResult(): TestRunResult {
+    return {
+      run_id: "t-fail",
+      success: false,
+      total: 0,
+      passed: 0,
+      stage: "compile_failed",
+      compile_stdout: "",
+      compile_stderr: "main.cpp:3:5: error: 'x' was not declared in this scope",
+      used_opt_level: "O2",
+      results: [],
+      job_object_degraded: false,
+    };
+  }
+
+  beforeEach(() => {
+    useRunManager.setState({
+      activeRunId: null,
+      kind: null,
+      status: "idle",
+      runResult: null,
+      testResult: null,
+      error: null,
+      testProgress: null,
+      ptyRunId: null,
+      ptyExitInfo: null,
+      ptyStartTime: null,
+      compileError: null,
+      compileWarning: null,
+      activeTabId: null,
+      resultsByTab: {},
+    });
+    invokeMock.mockReset();
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => {});
+  });
+
+  it("compileRun 编译失败 → compileError 写入发起 tab + 全局 state", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce(makeCompileFailedRunResult());
+
+    await useRunManager.getState().compileRun("code");
+
+    const s = useRunManager.getState();
+    expect(s.status).toBe("error");
+    expect(s.compileError).toBe("main.cpp:3:5: error: expected ';' before '}' token");
+    expect(s.resultsByTab["tab-a"]?.compileError).toBe("main.cpp:3:5: error: expected ';' before '}' token");
+  });
+
+  it("compileRun 编译失败后切到其他 tab → compileError 隔离", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce(makeCompileFailedRunResult());
+
+    await useRunManager.getState().compileRun("code");
+
+    // 切到 tab-b → 无 compileError
+    useRunManager.getState().setActiveTab("tab-b");
+    expect(useRunManager.getState().compileError).toBeNull();
+
+    // 切回 tab-a → 恢复 compileError
+    useRunManager.getState().setActiveTab("tab-a");
+    expect(useRunManager.getState().compileError).toBe("main.cpp:3:5: error: expected ';' before '}' token");
+  });
+
+  it("runTests 编译失败 → compileError 写入 result.compile_stderr", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce(makeCompileFailedTestRunResult());
+
+    await useRunManager.getState().runTests("code", "suite-a", false);
+
+    const s = useRunManager.getState();
+    expect(s.status).toBe("error");
+    expect(s.compileError).toBe("main.cpp:3:5: error: 'x' was not declared in this scope");
+    expect(s.resultsByTab["tab-a"]?.compileError).toBe("main.cpp:3:5: error: 'x' was not declared in this scope");
+  });
+
+  it("runTests 编译失败后切到其他 tab → compileError 隔离", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce(makeCompileFailedTestRunResult());
+
+    await useRunManager.getState().runTests("code", "suite-a", false);
+
+    // 切到 tab-b → 无 compileError
+    useRunManager.getState().setActiveTab("tab-b");
+    expect(useRunManager.getState().compileError).toBeNull();
+
+    // 切回 tab-a → 恢复 compileError
+    useRunManager.getState().setActiveTab("tab-a");
+    expect(useRunManager.getState().compileError).toBe("main.cpp:3:5: error: 'x' was not declared in this scope");
+  });
+
+  it("compileRun 编译成功 → compileError 保持 null（不误设）", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce(makeRunResult(true));
+
+    await useRunManager.getState().compileRun("code");
+
+    const s = useRunManager.getState();
+    expect(s.status).toBe("done");
+    expect(s.compileError).toBeNull();
+    expect(s.resultsByTab["tab-a"]?.compileError).toBeNull();
+  });
+});

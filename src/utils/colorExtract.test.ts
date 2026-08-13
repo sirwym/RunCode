@@ -8,6 +8,7 @@ import {
   kMeans,
   extractThemeColors,
   rederiveColors,
+  isVideoFile,
 } from "./colorExtract";
 
 /** 构造纯色 RGBA 数据（4x4 像素） */
@@ -316,6 +317,33 @@ describe("colorExtract", () => {
       const r1 = rederiveColors(darkEditable, "dark");
       const r2 = rederiveColors({ ...darkEditable, panel_bg: "#ff0000" }, "dark");
       expect(r1.panel_bg_alt).not.toBe(r2.panel_bg_alt);
+    });
+  });
+
+  describe("isVideoFile", () => {
+    it("mp4 扩展名返回 true", () => {
+      expect(isVideoFile("test.mp4")).toBe(true);
+      expect(isVideoFile("a/b/c.MP4")).toBe(true);
+      expect(isVideoFile("uuid1234.mp4")).toBe(true);
+    });
+
+    it("图片扩展名返回 false", () => {
+      expect(isVideoFile("test.png")).toBe(false);
+      expect(isVideoFile("test.jpg")).toBe(false);
+      expect(isVideoFile("test.jpeg")).toBe(false);
+      expect(isVideoFile("test.webp")).toBe(false);
+    });
+
+    it("无扩展名或其他扩展名返回 false", () => {
+      expect(isVideoFile("noext")).toBe(false);
+      expect(isVideoFile("test.avi")).toBe(false);
+      expect(isVideoFile("test.webm")).toBe(false);
+      expect(isVideoFile("")).toBe(false);
+    });
+
+    it("预览标记 __preview__.mp4 返回 true", () => {
+      expect(isVideoFile("__preview__.mp4")).toBe(true);
+      expect(isVideoFile("__preview__.png")).toBe(false);
     });
   });
 });

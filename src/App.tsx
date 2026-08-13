@@ -16,6 +16,7 @@ import StatusBar from "./components/StatusBar";
 import SettingsPanel from "./components/SettingsPanel";
 import RecentFilesDialog from "./components/RecentFilesDialog";
 import CheatsheetDialog from "./components/CheatsheetDialog";
+import RecoveryDialog from "./components/RecoveryDialog";
 import TitleBar from "./components/TitleBar";
 import { useRunManager } from "./hooks/useRunManager";
 import { useTestOptions } from "./hooks/useTestOptions";
@@ -34,7 +35,7 @@ import {
   type SettingsTheme,
 } from "./utils/theme";
 import { parseGccErrors } from "./utils/compileErrors";
-import { hexToRgb } from "./utils/colorExtract";
+import { hexToRgb, isVideoFile } from "./utils/colorExtract";
 
 type PanelTab = "tests" | "terminal" | "flowchart";
 
@@ -133,6 +134,9 @@ function App() {
   const setContent = useTabs((s) => s.setContent);
   const setSuiteId = useTabs((s) => s.setSuiteId);
   const restoreTabs = useTabs((s) => s.restore);
+  const pendingRecovery = useTabs((s) => s.pendingRecovery);
+  const applyRecovery = useTabs((s) => s.applyRecovery);
+  const dismissRecovery = useTabs((s) => s.dismissRecovery);
 
   const suiteId = useTestSuite((s) => s.suiteId);
 
@@ -140,6 +144,18 @@ function App() {
   const loadSettings = useSettings((s) => s.load);
 
   const editorRef = useRef<EditorHandle>(null);
+
+  // 崩溃恢复：applyRecovery 更新 store，但 Monaco model 独立，需手动同步
+  const handleApplyRecovery = useCallback((tabIds: string[]) => {
+    applyRecovery(tabIds);
+    const tabs = useTabs.getState().tabs;
+    for (const tabId of tabIds) {
+      const tab = tabs.find((t) => t.id === tabId);
+      if (tab) {
+        editorRef.current?.syncModelContent(tabId, tab.content);
+      }
+    }
+  }, [applyRecovery]);
 
   // Fix P1-3：关联中的 tabId 集合，防止并发重复创建套件
   const associatingRef = useRef<Set<string>>(new Set());
@@ -497,6 +513,9 @@ function App() {
 
   // 实际生效的背景图 URL（预览 blob URL 优先）
   const bgImageUrl = themePreview?.imageUrl ?? persistedBgImageUrl;
+  // 视频壁纸：走 <video> 元素层，CSS --bg-image 置 none 避免重叠
+  const isVideoBg = bgImageUrl ? isVideoFile(effectiveCustomTheme?.image_file ?? "") : false;
+  const cssBgImageUrl = isVideoBg ? null : bgImageUrl;
 
   useEffect(() => {
     const custom = effectiveCustomTheme;
@@ -505,7 +524,7 @@ function App() {
 
     if (custom) {
       // 复用纯函数 buildCustomThemeCssText，避免运行时与单元测试脱钩
-      const cssText = buildCustomThemeCssText(custom, bgImageUrl);
+      const cssText = buildCustomThemeCssText(custom, cssBgImageUrl);
       if (existing) {
         existing.textContent = cssText;
       } else {
@@ -523,6 +542,21 @@ function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.general.theme, customThemeKey, bgImageUrl]);
+
+  // 视频壁纸 ref + 窗口失焦/聚焦暂停恢复（省电）
+  const videoBgRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = videoBgRef.current;
+    if (!video || !isVideoBg) return;
+    const handleBlur = () => video.pause();
+    const handleFocus = () => video.play().catch(() => {});
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [bgImageUrl, isVideoBg]);
 
   // 监听菜单事件（macOS 原生菜单触发；Windows 无原生菜单不触发）
   useEffect(() => {
@@ -902,6 +936,17 @@ function App() {
 
   return (
     <div className="app-layout">
+      {isVideoBg && bgImageUrl && (
+        <video
+          ref={videoBgRef}
+          src={bgImageUrl}
+          autoPlay
+          loop
+          muted
+          playsInline
+          className="video-bg-layer"
+        />
+      )}
       {!isMac && (
         <TitleBar
           menuHandlers={menuHandlers}
@@ -1055,6 +1100,13 @@ function App() {
         onOpenPath={handleOpenRecentPath}
       />
       <CheatsheetDialog open={cheatsheetOpen} onClose={() => setCheatsheetOpen(false)} />
+      {pendingRecovery && pendingRecovery.length > 0 && (
+        <RecoveryDialog
+          tabs={pendingRecovery}
+          onApply={handleApplyRecovery}
+          onDismiss={dismissRecovery}
+        />
+      )}
     </div>
   );
 }

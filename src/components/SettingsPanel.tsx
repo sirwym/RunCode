@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import Editor from "@monaco-editor/react";
 import { useSettings } from "../hooks/useSettings";
@@ -30,6 +30,8 @@ import { getEffectiveTheme, type SettingsTheme } from "../utils/theme";
 import {
   extractThemeColors,
   loadImageToImageData,
+  loadVideoFirstFrameToImageData,
+  isVideoFile,
   rederiveColors,
   type ExtractedColors,
 } from "../utils/colorExtract";
@@ -261,26 +263,39 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setErrorMsg(null);
     const selected = await openDialog({
       multiple: false,
-      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "mp4"] }],
     });
     if (typeof selected !== "string") return; // 用户取消
 
     setExtracting(true);
     try {
-      // 1. 读取图片字节（后端校验扩展名 + 大小）
-      const bytes = await invoke<number[]>("read_file_bytes", { path: selected });
-      const blob = new Blob([new Uint8Array(bytes)]);
-      const url = URL.createObjectURL(blob);
+      const isVideo = isVideoFile(selected);
+      let url: string;
+      let imageData: Uint8ClampedArray;
 
-      // 2. Canvas 提取颜色
-      const imageData = await loadImageToImageData(url);
+      if (isVideo) {
+        // 视频：用 convertFileSrc 转路径，不走 read_file_bytes（10MB 限制）
+        url = convertFileSrc(selected);
+        imageData = await loadVideoFirstFrameToImageData(url);
+      } else {
+        // 图片：走原 read_file_bytes → blob URL 路径
+        const bytes = await invoke<number[]>("read_file_bytes", { path: selected });
+        const blob = new Blob([new Uint8Array(bytes)]);
+        url = URL.createObjectURL(blob);
+        imageData = await loadImageToImageData(url);
+      }
+
+      // Canvas 提取颜色
       const colors = extractThemeColors(imageData);
 
-      // 3. revoke 上一次的 blob URL（避免内存泄漏）
+      // revoke 上一次的 blob URL（仅图片需要，asset:// 无需 revoke）
       if (previewBlobUrlRef.current) {
         URL.revokeObjectURL(previewBlobUrlRef.current);
+        previewBlobUrlRef.current = null;
       }
-      previewBlobUrlRef.current = url;
+      if (!isVideo) {
+        previewBlobUrlRef.current = url;
+      }
 
       // 4. 进入预览状态（不立即应用，保留滑块值）
       setPreviewColors(colors);
@@ -293,7 +308,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       // 滑块值优先用 draft 中已有的 custom_theme 值（重新导入保留），否则用默认值
       const draftCt = draft?.general.custom_theme;
       const previewCt: CustomThemeConfig = {
-        image_file: "__preview__", // 临时标记，App 会用 imageUrl 作为背景
+        image_file: isVideo ? "__preview__.mp4" : "__preview__.png", // 临时标记，App 据扩展名判断视频/图片背景
         colors: {
           bg: colors.bg,
           panel_bg: colors.panel_bg,

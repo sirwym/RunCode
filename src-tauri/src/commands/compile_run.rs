@@ -107,17 +107,25 @@ pub async fn compile_only(
     .await?;
 
     if compile_out.exit_code != Some(0) {
+        // 将诊断输出中的绝对路径替换为 main.cpp，避免冗长临时路径干扰阅读
+        let main_cpp_str = main_cpp.to_string_lossy();
+        let stderr = String::from_utf8_lossy(&compile_out.stderr)
+            .replace(main_cpp_str.as_ref(), "main.cpp");
         return Ok(CompileResult::Failed {
             stdout: String::from_utf8_lossy(&compile_out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&compile_out.stderr).into_owned(),
+            stderr,
             exit_code: compile_out.exit_code,
         });
     }
 
+    // 编译成功仍可能有 warning，同样做路径替换
+    let main_cpp_str = main_cpp.to_string_lossy();
+    let stderr = String::from_utf8_lossy(&compile_out.stderr)
+        .replace(main_cpp_str.as_ref(), "main.cpp");
     Ok(CompileResult::Success {
         exe_path,
         stdout: String::from_utf8_lossy(&compile_out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&compile_out.stderr).into_owned(),
+        stderr,
     })
 }
 
@@ -362,11 +370,41 @@ int main() { return 0; }
                     stderr.contains("warning") || stderr.contains("_find"),
                     "stderr 应包含 warning 诊断，实际: {stderr}"
                 );
+                // 路径替换验证：stderr 不应包含临时目录绝对路径
+                let work_dir_str = work_dir.path().to_string_lossy();
+                assert!(
+                    !stderr.contains(work_dir_str.as_ref()),
+                    "stderr 不应包含临时目录绝对路径，实际: {stderr}"
+                );
                 // stdout 通常为空（编译器诊断都走 stderr）
                 let _ = stdout;
             }
             CompileResult::Failed { stderr, .. } => {
                 panic!("预期编译成功（warning 不阻止编译），但得到 CompileFailed: {stderr}");
+            }
+        }
+    }
+
+    /// 验证 compile_only 在编译失败时，stderr 中的绝对路径被替换为 main.cpp
+    #[tokio::test]
+    async fn compile_only_replaces_path_in_failed_stderr() {
+        // 缺分号，必定编译失败
+        let bad_code = "int main() { int a = 10 }";
+        let (config, limits) = test_config();
+        let work_dir = TempDir::new().unwrap();
+        let result = compile_only(bad_code, &config, CompileScenario::Run, work_dir.path(), limits, None)
+            .await
+            .expect("应返回编译失败结果");
+        match result {
+            CompileResult::Failed { stderr, .. } => {
+                let work_dir_str = work_dir.path().to_string_lossy();
+                assert!(
+                    !stderr.contains(work_dir_str.as_ref()),
+                    "stderr 不应包含临时目录绝对路径，实际: {stderr}"
+                );
+            }
+            CompileResult::Success { .. } => {
+                panic!("预期编译失败，但得到 Success");
             }
         }
     }

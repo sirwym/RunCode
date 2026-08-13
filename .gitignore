@@ -29,6 +29,9 @@ package-lock.json
 # TRAE AI 协作工具私有配置
 .trae/
 
+# WorkBuddy 私有配置与产物（审查报告、记忆、临时数据等，不应提交）
+.workbuddy/
+
 # 临时图片（对话中处理的输入/产物，未在代码中引用）
 logo.png
 logo_processed.png

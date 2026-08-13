@@ -319,6 +319,13 @@ export const zh = {
     cancel: "取消",
     closeAllConfirmMsg: "有 {count} 个文件未保存，是否全部保存？",
     untitled: "未命名",
+    recovery: {
+      title: "崩溃恢复",
+      description: "检测到以下文件有未保存的更改，是否恢复？",
+      restore: "恢复选中",
+      dismiss: "全部丢弃",
+      time: "自动保存时间",
+    },
   },
   cheatsheet: {
     title: "C++ 速查表",
@@ -332,5 +339,9 @@ export const zh = {
     catCommonAlgorithm: "常用算法",
     catDP: "动态规划",
     catGraph: "图论",
+  },
+  editor: {
+    largeFileMinimapDisabled: "文件较大，已关闭缩略图以提升性能",
+    hugeFileReadOnly: "文件超过 5MB，已切换只读模式",
   },
 } as const;

@@ -177,6 +177,18 @@ body {
   overflow: hidden;
 }
 
+/* 视频壁纸背景层：固定铺满视口，置于内容下方 */
+.video-bg-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  z-index: -1;
+  pointer-events: none;
+}
+
 /* custom 主题下的图片遮罩层 */
 /* 作用：降低图片整体亮度，避免亮色图片刺眼，提升面板间隙可读性 */
 /* pointer-events: none 确保不阻挡点击 */

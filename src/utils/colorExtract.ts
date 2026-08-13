@@ -299,6 +299,8 @@ export function extractThemeColors(data: Uint8ClampedArray): ExtractedColors {
   const textMuted = baseMode === "dark" ? "#a3a3a3" : "#737373";
 
   // 8. primary：取饱和度最高且与 bg 对比度 ≥ 4.5 的聚类；都不满足则回退品牌色
+  // 以下 fallback HEX（#3b65b8/#365eaa/#fafafa/#0a0a0a/#a3a3a3/#737373）与 global.css 的
+  // --primary / --text / --text-muted 令牌保持一致，改品牌色时需同步更新两处
   let primaryHex = baseMode === "dark" ? "#3b65b8" : "#365eaa";
   let bestSat = -1;
   for (let i = 0; i < centers.length; i++) {
@@ -405,4 +407,43 @@ export async function loadImageToImageData(url: string): Promise<Uint8ClampedArr
   if (!ctx) throw new Error("无法获取 Canvas 2D 上下文");
   ctx.drawImage(img, 0, 0, w, h);
   return ctx.getImageData(0, 0, w, h).data;
+}
+
+/**
+ * 从视频 URL 加载首帧到 Canvas，返回 ImageData 的 data 字段
+ * 缩放到 64x64 上限，与 loadImageToImageData 一致，复用 extractThemeColors
+ */
+export async function loadVideoFirstFrameToImageData(url: string): Promise<Uint8ClampedArray> {
+  const video = document.createElement("video");
+  video.src = url;
+  video.muted = true;
+  video.crossOrigin = "anonymous";
+  // 等待首帧可绘制
+  await new Promise<void>((resolve, reject) => {
+    video.onloadeddata = () => resolve();
+    video.onerror = () => reject(new Error("视频首帧加载失败"));
+  });
+  // seek 到 0 确保取首帧
+  video.currentTime = 0;
+  await new Promise<void>((resolve) => {
+    video.onseeked = () => resolve();
+  });
+  const max = 64;
+  const scale = Math.min(max / video.videoWidth, max / video.videoHeight, 1);
+  const w = Math.max(1, Math.floor(video.videoWidth * scale));
+  const h = Math.max(1, Math.floor(video.videoHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("无法获取 Canvas 2D 上下文");
+  ctx.drawImage(video, 0, 0, w, h);
+  return ctx.getImageData(0, 0, w, h).data;
+}
+
+/**
+ * 判断文件名是否为视频（mp4）
+ */
+export function isVideoFile(filename: string): boolean {
+  return filename.toLowerCase().endsWith(".mp4");
 }

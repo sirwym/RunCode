@@ -16,7 +16,7 @@ mod settings;
 mod test_suite;
 
 use commands::{
-    add_recent_file, add_test_case, clear_recent_files, compile_and_run, create_test_suite,
+    add_recent_file, add_test_case, check_syntax, clear_recent_files, compile_and_run, create_test_suite,
     delete_custom_theme_image, delete_test_suite, extract_code_symbols,
     find_or_create_suite_by_doc_path, format_code, generate_cfg, get_all_case_previews,
     get_case_full_expected, get_case_preview, get_custom_theme_image_path, get_recent_files,
@@ -105,6 +105,7 @@ pub fn run() {
             format_code,
             update_view_menu_state,
             extract_code_symbols,
+            check_syntax,
             generate_cfg,
             read_file_bytes,
             save_custom_theme_image,

@@ -18,6 +18,74 @@ function uuid(): string {
 const STORAGE_KEY = "runcode:tabs";
 const ACTIVE_KEY = "runcode:activeTabId";
 
+// ============ 崩溃恢复 autosave（功能2） ============
+export const AUTOSAVE_PREFIX = "runcode:autosave:";
+export const AUTOSAVE_DEBOUNCE_MS = 500;
+export const AUTOSAVE_MAX_BYTES = 1024 * 1024; // 1MB 单 tab 上限
+
+// 防抖计时器（按 tabId 分隔，模块级）
+const autosaveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+export interface AutosaveEntry {
+  content: string;
+  timestamp: number;
+  fileName: string;
+  language: string;
+  path: string | null;
+}
+
+export interface RecoverableTab {
+  tabId: string;
+  fileName: string;
+  savedContent: string;    // 文件/模板当前内容
+  autosaveContent: string; // autosave 快照内容
+  timestamp: number;
+}
+
+export function saveAutosave(tabId: string, entry: AutosaveEntry): void {
+  try {
+    // 超过 1MB 不保存（依赖手动保存，避免 localStorage 溢出）
+    if (entry.content.length > AUTOSAVE_MAX_BYTES) return;
+    localStorage.setItem(AUTOSAVE_PREFIX + tabId, JSON.stringify(entry));
+  } catch {
+    // localStorage 满或禁用，静默忽略
+  }
+}
+
+export function clearAutosave(tabId: string): void {
+  try {
+    localStorage.removeItem(AUTOSAVE_PREFIX + tabId);
+  } catch {
+    // 忽略
+  }
+  if (autosaveTimers[tabId]) {
+    clearTimeout(autosaveTimers[tabId]);
+    delete autosaveTimers[tabId];
+  }
+}
+
+export function loadAllAutosaves(): Array<{ tabId: string; entry: AutosaveEntry }> {
+  const result: Array<{ tabId: string; entry: AutosaveEntry }> = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(AUTOSAVE_PREFIX)) {
+        try {
+          const tabId = key.slice(AUTOSAVE_PREFIX.length);
+          const entry = JSON.parse(localStorage.getItem(key)!) as AutosaveEntry;
+          result.push({ tabId, entry });
+        } catch {
+          // 损坏的 autosave，删除
+          localStorage.removeItem(key);
+        }
+      }
+    }
+  } catch {
+    // localStorage 禁用，返回空
+  }
+  return result;
+}
+
 // 默认 C++ 模板：当 settings.compiler.template 缺失时回退使用
 const DEFAULT_CPP_TEMPLATE = `#include <bits/stdc++.h>
 using namespace std;
@@ -102,6 +170,7 @@ let onCloseTabsCb: ((ids: string[]) => void) | null = null;
 interface TabsState {
   tabs: Tab[];
   activeId: string | null;
+  pendingRecovery: RecoverableTab[] | null;
 
   newTab: (language?: TabLanguage) => string;
   openTab: (path: string) => Promise<string | null>;
@@ -117,11 +186,15 @@ interface TabsState {
   restore: () => Promise<void>;
   // 设置 closeTab/closeAll 成功删除 tab 后的回调，外部用于 dispose Monaco model
   setOnCloseTabs: (cb: ((ids: string[]) => void) | null) => void;
+  // 崩溃恢复（功能2）
+  applyRecovery: (tabIds: string[]) => void;
+  dismissRecovery: () => void;
 }
 
 export const useTabs = create<TabsState>((set, get) => ({
   tabs: [],
   activeId: null,
+  pendingRecovery: null,
 
   newTab: (language = "cpp") => {
     const id = uuid();
@@ -235,6 +308,8 @@ export const useTabs = create<TabsState>((set, get) => ({
     onCloseTabsCb?.([id]);
     // 清理该 tab 的运行结果快照，避免内存泄漏
     useRunManager.getState().clearTab(id);
+    // 清理该 tab 的 autosave（功能2a）
+    clearAutosave(id);
   },
 
   closeAll: async () => {
@@ -260,6 +335,7 @@ export const useTabs = create<TabsState>((set, get) => ({
     // 清理所有关闭 tab 的运行结果快照
     for (const id of closedIds) {
       useRunManager.getState().clearTab(id);
+      clearAutosave(id);
     }
   },
 
@@ -282,6 +358,8 @@ export const useTabs = create<TabsState>((set, get) => ({
         ),
       }));
       persistTabs(get().tabs);
+      // 保存成功后清理 autosave（功能2a）
+      clearAutosave(id);
       // Fix P2-2：保存成功后写入最近文件
       try {
         await invoke("add_recent_file", { path: tab.path, name: tab.fileName });
@@ -320,6 +398,8 @@ export const useTabs = create<TabsState>((set, get) => ({
         ),
       }));
       persistTabs(get().tabs);
+      // 另存为成功后清理 autosave（功能2a）
+      clearAutosave(id);
       // Fix P2-2：另存为成功后写入最近文件
       try {
         await invoke("add_recent_file", { path: selected, name: newName });
@@ -341,6 +421,21 @@ export const useTabs = create<TabsState>((set, get) => ({
           : t,
       ),
     }));
+
+    // 防抖 autosave dirty content（功能2a：仅 dirty 时保存）
+    const tab = get().tabs.find((t) => t.id === id);
+    if (tab && tab.dirty) {
+      if (autosaveTimers[id]) clearTimeout(autosaveTimers[id]);
+      autosaveTimers[id] = setTimeout(() => {
+        saveAutosave(id, {
+          content: tab.content,
+          timestamp: Date.now(),
+          fileName: tab.fileName,
+          language: tab.language,
+          path: tab.path,
+        });
+      }, AUTOSAVE_DEBOUNCE_MS);
+    }
   },
 
   setSuiteId: (id, suiteId) => {
@@ -358,7 +453,8 @@ export const useTabs = create<TabsState>((set, get) => ({
   restore: async () => {
     const persisted = loadPersistedTabs();
     if (persisted.length === 0) {
-      // 首次：创建默认 tab
+      // 首次：创建默认 tab，清理所有孤儿 autosave
+      loadAllAutosaves().forEach(({ tabId }) => clearAutosave(tabId));
       get().newTab("cpp");
       return;
     }
@@ -397,6 +493,8 @@ export const useTabs = create<TabsState>((set, get) => ({
       });
     }
     if (tabs.length === 0) {
+      // 所有文件读取失败：创建默认 tab，清理所有孤儿 autosave
+      loadAllAutosaves().forEach(({ tabId }) => clearAutosave(tabId));
       get().newTab("cpp");
       return;
     }
@@ -404,11 +502,54 @@ export const useTabs = create<TabsState>((set, get) => ({
     const activeId = savedActive && tabs.find((t) => t.id === savedActive)
       ? savedActive
       : tabs[0].id;
-    set({ tabs, activeId });
+
+    // 检测 autosave：与当前 content 不同时加入 pendingRecovery（功能2b）
+    const autosaves = loadAllAutosaves();
+    const recoverable: RecoverableTab[] = [];
+    for (const { tabId, entry } of autosaves) {
+      const tab = tabs.find((t) => t.id === tabId);
+      if (tab && entry.content !== tab.content) {
+        recoverable.push({
+          tabId,
+          fileName: tab.fileName,
+          savedContent: tab.content,
+          autosaveContent: entry.content,
+          timestamp: entry.timestamp,
+        });
+      } else {
+        // autosave 与当前内容相同，或 tab 已不存在，清理
+        clearAutosave(tabId);
+      }
+    }
+
+    set({ tabs, activeId, pendingRecovery: recoverable.length > 0 ? recoverable : null });
     saveActiveId(activeId);
   },
 
   setOnCloseTabs: (cb) => {
     onCloseTabsCb = cb;
+  },
+
+  applyRecovery: (tabIds) => {
+    set((s) => {
+      const tabs = s.tabs.map((t) => {
+        if (tabIds.includes(t.id)) {
+          const recovery = s.pendingRecovery?.find((r) => r.tabId === t.id);
+          if (recovery) {
+            return { ...t, content: recovery.autosaveContent, dirty: true };
+          }
+        }
+        return t;
+      });
+      return { tabs, pendingRecovery: null };
+    });
+    // 清理已恢复的 autosave
+    tabIds.forEach(clearAutosave);
+  },
+
+  dismissRecovery: () => {
+    // 清理所有 pending autosave
+    get().pendingRecovery?.forEach((r) => clearAutosave(r.tabId));
+    set({ pendingRecovery: null });
   },
 }));

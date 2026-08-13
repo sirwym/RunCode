@@ -32,7 +32,7 @@ async function getMermaid(themeKey: string) {
     const panelBgAlt = readCssVar("--panel-bg-alt");
     m.initialize({
       startOnLoad: false,
-      securityLevel: "loose",
+      securityLevel: "strict",
       theme: "base",
       themeVariables: {
         primaryColor: panelBgAlt.startsWith("#") ? panelBgAlt : readCssVar("--bg"),

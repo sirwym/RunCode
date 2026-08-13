@@ -319,6 +319,13 @@ export const en = {
     cancel: "Cancel",
     closeAllConfirmMsg: "{count} file(s) unsaved. Save all?",
     untitled: "untitled",
+    recovery: {
+      title: "Crash Recovery",
+      description: "Unsaved changes detected for the following files. Restore?",
+      restore: "Restore Selected",
+      dismiss: "Discard All",
+      time: "Autosave time",
+    },
   },
   cheatsheet: {
     title: "C++ Cheatsheet",
@@ -332,5 +339,9 @@ export const en = {
     catCommonAlgorithm: "Common Algorithms",
     catDP: "Dynamic Programming",
     catGraph: "Graph Theory",
+  },
+  editor: {
+    largeFileMinimapDisabled: "Large file: minimap disabled for performance",
+    hugeFileReadOnly: "File >5MB: read-only mode",
   },
 } as const;

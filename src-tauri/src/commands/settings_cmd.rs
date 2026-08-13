@@ -25,7 +25,7 @@ pub async fn get_custom_theme_image_path(
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    let allowed = ["png", "jpg", "jpeg", "webp"];
+    let allowed = ["png", "jpg", "jpeg", "webp", "mp4"];
     if !allowed.contains(&ext.as_str()) {
         return Err(AppError::Other {
             detail: format!("无效的图片扩展名: {ext}"),
@@ -124,18 +124,23 @@ pub async fn save_custom_theme_image(
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    let allowed = ["png", "jpg", "jpeg", "webp"];
+    let allowed = ["png", "jpg", "jpeg", "webp", "mp4"];
     if !allowed.contains(&ext.as_str()) {
         return Err(AppError::Other {
-            detail: format!("不支持的图片格式: {ext}"),
+            detail: format!("不支持的媒体格式: {ext}（仅支持 png/jpg/jpeg/webp/mp4）"),
         });
     }
 
-    // 大小校验（10MB 上限）
+    // 大小校验：图片 10MB，视频 50MB
     let metadata = fs::metadata(&source_path)?;
-    if metadata.len() > 10 * 1024 * 1024 {
+    let size_limit = if ext == "mp4" { 50 * 1024 * 1024 } else { 10 * 1024 * 1024 };
+    if metadata.len() > size_limit {
         return Err(AppError::Other {
-            detail: "图片大小超过 10MB 上限".into(),
+            detail: format!(
+                "{}大小超过 {}MB 上限",
+                if ext == "mp4" { "视频" } else { "图片" },
+                size_limit / 1024 / 1024
+            ),
         });
     }
 
@@ -171,13 +176,13 @@ pub async fn delete_custom_theme_image(
             detail: "无效的图片文件名".into(),
         });
     }
-    // 仅允许图片扩展名
+    // 仅允许图片/视频扩展名
     let ext = Path::new(&image_file)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    let allowed = ["png", "jpg", "jpeg", "webp"];
+    let allowed = ["png", "jpg", "jpeg", "webp", "mp4"];
     if !allowed.contains(&ext.as_str()) {
         return Err(AppError::Other {
             detail: format!("无效的图片文件扩展名: {ext}"),

@@ -32,6 +32,13 @@ import { CPP_MEMBERS, inferTypeAtDot, buildMemberSuggestions } from "../monaco/c
 const isMac =
   typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
+// 大文件分级阈值
+// < LARGE_FILE_THRESHOLD：正常编辑
+// LARGE_FILE_THRESHOLD ~ HUGE_FILE_THRESHOLD：关闭 minimap + wordBasedSuggestions
+// HUGE_FILE_THRESHOLD ~ 10MB：只读模式（10MB 由后端 documents.rs MAX_FILE_SIZE 拒绝）
+export const LARGE_FILE_THRESHOLD = 1024 * 1024;      // 1MB
+export const HUGE_FILE_THRESHOLD = 5 * 1024 * 1024;   // 5MB
+
 // RunCode 品牌交互色（与 global.css 深色主题一致）
 // Monaco colors 仅接受 HEX（3/4/6/8 位），rgba() 会被忽略并回退到默认色（红色）
 export const RUNCODE_DARK_COLORS: Record<string, string> = {
@@ -46,6 +53,13 @@ export const RUNCODE_DARK_COLORS: Record<string, string> = {
   "editorSuggestWidget.focusBorder": "#6f91d5",
   "inputOption.activeBorder": "#6f91d5",
   "editorBracketMatch.border": "#6f91d5",
+  // hover 浮层（鼠标悬停错误行时的提示框）
+  "editorHoverWidget.background": "#1e1e2e",
+  "editorHoverWidget.border": "#2a2a2a",
+  "editorHoverWidget.foreground": "#fafafa",
+  // 错误导航浮层（F8/点击错误行时的导航面板）
+  "editorMarkerNavigation.background": "#1e1e2e",
+  "editorMarkerNavigationError.background": "#f8717133",
 };
 
 // RunCode 品牌交互色（与 global.css 浅色主题一致）
@@ -62,6 +76,13 @@ export const RUNCODE_LIGHT_COLORS: Record<string, string> = {
   "editorSuggestWidget.focusBorder": "#365eaa",
   "inputOption.activeBorder": "#365eaa",
   "editorBracketMatch.border": "#365eaa",
+  // hover 浮层
+  "editorHoverWidget.background": "#ffffff",
+  "editorHoverWidget.border": "#d4d4d4",
+  "editorHoverWidget.foreground": "#0a0a0a",
+  // 错误导航浮层
+  "editorMarkerNavigation.background": "#ffffff",
+  "editorMarkerNavigationError.background": "#b91c1c1A",
 };
 
 // 渲染层 Monaco 主题映射：完全由 effectiveTheme（general.theme 派生）决定
@@ -103,6 +124,13 @@ export function buildCustomMonacoColors(
     "editorSuggestWidget.focusBorder": c.primary,
     "inputOption.activeBorder": c.primary,
     "editorBracketMatch.border": c.primary,
+    // hover 浮层（用 customColors 的 panel_bg/border/text）
+    "editorHoverWidget.background": c.panel_bg,
+    "editorHoverWidget.border": c.border,
+    "editorHoverWidget.foreground": c.text,
+    // 错误导航浮层
+    "editorMarkerNavigation.background": c.panel_bg,
+    "editorMarkerNavigationError.background": "#f8717133",
   };
 }
 
@@ -168,6 +196,8 @@ export interface EditorHandle {
   setCompileErrors: (errors: CompileError[]) => void;
   clearCompileErrors: () => void;
   revealLine: (line: number) => void;
+  /** 按 tabId 同步 model content（用于崩溃恢复等 store 更新后同步 Monaco） */
+  syncModelContent: (tabId: string, content: string) => void;
 }
 
 interface EditorPaneProps {
@@ -276,6 +306,16 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
           modelsRef.current.set(tabId, model);
         }
         editor.setModel(model);
+
+        // 大文件分级防御（功能4a）
+        const size = content.length;
+        const isLarge = size >= LARGE_FILE_THRESHOLD;
+        const isHuge = size >= HUGE_FILE_THRESHOLD;
+        editor.updateOptions({
+          readOnly: isHuge,
+          minimap: { enabled: !isLarge && (settings?.minimap_enabled ?? false) },
+          wordBasedSuggestions: isLarge ? "off" : "currentDocument",
+        });
       },
       disposeModel: (tabId) => {
         const monaco = monacoRef.current;
@@ -292,27 +332,56 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
         const monaco = monacoRef.current;
         if (!editor || !monaco || errors.length === 0) return;
 
+        const model = editor.getModel();
+        if (!model) return;
+
+        // 1. setModelMarkers：进入 Problems 面板 + 列级 squiggly
+        const markers: MonacoEditorNS.IMarkerData[] = errors.map((e) => ({
+          startLineNumber: e.line,
+          startColumn: e.column,
+          endLineNumber: e.line,
+          endColumn: e.endColumn ?? e.column + 1,
+          message: e.translated ? `${e.translated}\n\n原始: ${e.message}` : e.message,
+          severity: monaco.MarkerSeverity.Error,
+        }));
+        monaco.editor.setModelMarkers(model, "runcode-compile", markers);
+
+        // 2. 保留整行高亮装饰（视觉补充，与 squiggly 互补）
         const decorations: MonacoEditorNS.IModelDeltaDecoration[] = errors.map((e) => ({
           range: new monaco.Range(e.line, 1, e.line, 1),
           options: {
             isWholeLine: true,
             className: "compile-error-line",
-            hoverMessage: { value: `**${e.message}**` },
+            hoverMessage: { value: e.translated ? `**${e.translated}**\n\n原始: ${e.message}` : `**${e.message}**` },
           },
         }));
-
         decorationsRef.current = editor.deltaDecorations(decorationsRef.current, decorations);
-        // 跳转到第一个错误行
+
+        // 3. 跳转到第一个错误行
         editor.revealLineInCenter(errors[0].line);
       },
       clearCompileErrors: () => {
         const editor = editorRef.current;
-        if (!editor) return;
+        const monaco = monacoRef.current;
+        if (!editor || !monaco) return;
+        const model = editor.getModel();
+        if (model) {
+          monaco.editor.setModelMarkers(model, "runcode-compile", []);
+        }
         decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
       },
       revealLine: (line: number) => {
         editorRef.current?.revealLineInCenter(line);
         editorRef.current?.focus();
+      },
+      syncModelContent: (tabId, content) => {
+        const monaco = monacoRef.current;
+        if (!monaco) return;
+        const uri = monaco.Uri.parse(`file:///tab/${tabId}`);
+        const model = monaco.editor.getModel(uri);
+        if (model) {
+          model.setValue(content);
+        }
       },
     }),
     []

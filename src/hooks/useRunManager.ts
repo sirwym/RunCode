@@ -147,6 +147,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
         // 守卫：已被 stop 或被新任务替换，丢弃结果（不覆盖 idle）
         if (s.activeRunId !== runId) return s;
         const isStillActive = s.activeTabId === initiatorTabId;
+        const isCompileFailed = result.stage === "compile_failed";
         const resultsByTab = initiatorTabId
           ? {
               ...s.resultsByTab,
@@ -154,7 +155,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 runResult: result,
                 testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
-                compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+                compileError: isCompileFailed ? result.stderr : s.resultsByTab[initiatorTabId]?.compileError ?? null,
                 compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
@@ -163,6 +164,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
           activeRunId: null,
           status: result.success ? "done" : "error",
           runResult: isStillActive ? result : s.runResult,
+          compileError: isStillActive && isCompileFailed ? result.stderr : s.compileError,
           kind: null,
           error: null,
           resultsByTab,
@@ -218,8 +220,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       unlisten = await listen<TestProgress>("test_progress", (e) => {
         set({ testProgress: e.payload });
       });
-    } catch {
-      // 监听失败忽略
+    } catch (err) {
+      console.warn("[useRunManager] test_progress 监听注册失败，测试进度将无反馈", err);
     }
 
     // 守卫：listen await 期间用户点 stop，stop 看到 activeRunId 还在但后端 session 还没注册，
@@ -242,6 +244,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
         // 守卫：已被 stop 或被新任务替换，丢弃结果
         if (s.activeRunId !== runId) return s;
         const isStillActive = s.activeTabId === initiatorTabId;
+        const isCompileFailed = result.stage === "compile_failed";
         const resultsByTab = initiatorTabId
           ? {
               ...s.resultsByTab,
@@ -249,7 +252,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 runResult: s.resultsByTab[initiatorTabId]?.runResult ?? null,
                 testResult: result,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
-                compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
+                compileError: isCompileFailed ? result.compile_stderr : s.resultsByTab[initiatorTabId]?.compileError ?? null,
                 compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
@@ -258,6 +261,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
           activeRunId: null,
           status: result.success ? "done" : "error",
           testResult: isStillActive ? result : s.testResult,
+          compileError: isStillActive && isCompileFailed ? result.compile_stderr : s.compileError,
           kind: null,
           error: null,
           resultsByTab,
@@ -397,8 +401,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
     if (!runId) return;
     try {
       await invoke<boolean>("stop_pty_run", { runId });
-    } catch {
-      // 忽略
+    } catch (err) {
+      console.warn("[useRunManager] stop_pty_run 调用失败", err);
     }
     const startTime = get().ptyStartTime;
     const durationMs = startTime ? Date.now() - startTime : null;
@@ -476,8 +480,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
 
     try {
       await invoke<boolean>("stop_run", { runId });
-    } catch {
-      // 忽略
+    } catch (err) {
+      console.warn("[useRunManager] stop_run 调用失败", err);
     }
     set({ activeRunId: null, status: "idle", kind: null });
   },

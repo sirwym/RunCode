@@ -6,6 +6,8 @@ import {
   RUNCODE_DARK_COLORS,
   RUNCODE_LIGHT_COLORS,
   EDITOR_MENU_GROUPS,
+  LARGE_FILE_THRESHOLD,
+  HUGE_FILE_THRESHOLD,
   type EditorMenuItem,
 } from "./Editor";
 import { zh } from "../locales/zh";
@@ -417,6 +419,44 @@ describe("EDITOR_MENU_GROUPS 右键菜单配置", () => {
   it("key 在所有分组内唯一", () => {
     const keys = allItems.map((i) => i.key);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+// 功能4：大文件分级阈值
+// < 1MB 正常 / 1-5MB 关闭 minimap + wordBasedSuggestions / 5-10MB 只读 / >10MB 后端拒绝
+describe("功能4 大文件分级阈值", () => {
+  it("LARGE_FILE_THRESHOLD 为 1MB（1024 * 1024）", () => {
+    expect(LARGE_FILE_THRESHOLD).toBe(1024 * 1024);
+  });
+
+  it("HUGE_FILE_THRESHOLD 为 5MB（5 * 1024 * 1024）", () => {
+    expect(HUGE_FILE_THRESHOLD).toBe(5 * 1024 * 1024);
+  });
+
+  it("LARGE_FILE_THRESHOLD < HUGE_FILE_THRESHOLD（分级递进）", () => {
+    expect(LARGE_FILE_THRESHOLD).toBeLessThan(HUGE_FILE_THRESHOLD);
+  });
+});
+
+// 功能4：大文件 i18n 文案
+// 确保 zh/en 两个语言包的 editor section 包含大文件提示 key
+describe("功能4 大文件 i18n 文案", () => {
+  it("zh.editor.largeFileMinimapDisabled 存在且非空", () => {
+    expect(zh.editor, "zh.editor section 缺失").toBeDefined();
+    expect(zh.editor.largeFileMinimapDisabled, "zh.editor.largeFileMinimapDisabled 缺失").toBeTruthy();
+  });
+
+  it("zh.editor.hugeFileReadOnly 存在且非空", () => {
+    expect(zh.editor.hugeFileReadOnly, "zh.editor.hugeFileReadOnly 缺失").toBeTruthy();
+  });
+
+  it("en.editor.largeFileMinimapDisabled 存在且非空", () => {
+    expect(en.editor, "en.editor section 缺失").toBeDefined();
+    expect(en.editor.largeFileMinimapDisabled, "en.editor.largeFileMinimapDisabled 缺失").toBeTruthy();
+  });
+
+  it("en.editor.hugeFileReadOnly 存在且非空", () => {
+    expect(en.editor.hugeFileReadOnly, "en.editor.hugeFileReadOnly 缺失").toBeTruthy();
   });
 });
 

@@ -23,7 +23,21 @@ export type StartPtyResult =
 export interface CompileError {
   line: number;
   column: number;
+  /** 错误结束列（用于 squiggly 范围，缺省为 column+1） */
+  endColumn?: number;
   message: string;
+  /** 教学化中文翻译（未匹配规则时为 null） */
+  translated?: string | null;
+}
+
+/** tree-sitter 语法检查结果（与 Rust 端 parser::SyntaxIssue 对应） */
+export interface SyntaxIssue {
+  line: number;
+  column: number;
+  end_line: number;
+  end_column: number;
+  message: string;
+  kind: "error" | "missing";
 }
 
 export interface RunResult {
@@ -187,7 +201,7 @@ export interface CustomThemeColors {
 
 // 自定义图片主题配置（image_file + 提取颜色 + 亮度模式 + 透明度参数）
 export interface CustomThemeConfig {
-  /** 图片在 app_data_dir/custom_themes/ 下的文件名（不含路径） */
+  /** 媒体文件在 app_data_dir/custom_themes/ 下的文件名（不含路径），支持图片 png/jpg/jpeg/webp 和视频 mp4 */
   image_file: string;
   /** 提取出的颜色组（缓存避免每次重新提取） */
   colors: CustomThemeColors;

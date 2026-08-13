@@ -40,6 +40,62 @@ pub fn parse_cpp(code: &str) -> Option<Tree> {
     parser.parse(code, None)
 }
 
+/// 语法问题（tree-sitter ERROR/MISSING 节点）
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct SyntaxIssue {
+    pub line: usize,       // 1-based
+    pub column: usize,     // 1-based
+    pub end_line: usize,
+    pub end_column: usize,
+    pub message: String,
+    pub kind: String, // "error" / "missing"
+}
+
+/// 收集 tree-sitter ERROR/MISSING 节点
+/// 失败时返回空 Vec（不报错，语法检查降级为无提示）
+pub fn check_syntax(code: &str) -> Vec<SyntaxIssue> {
+    let tree = match parse_cpp(code) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let mut issues = Vec::new();
+    let root = tree.root_node();
+    collect_syntax_issues(&root, &mut issues, code.as_bytes());
+    issues
+}
+
+fn collect_syntax_issues(node: &Node, issues: &mut Vec<SyntaxIssue>, source: &[u8]) {
+    if node.is_error() {
+        let start = node.start_position();
+        let end = node.end_position();
+        issues.push(SyntaxIssue {
+            line: start.row + 1,
+            column: start.column + 1,
+            end_line: end.row + 1,
+            end_column: end.column + 1,
+            message: "此处可能存在语法错误".to_string(),
+            kind: "error".to_string(),
+        });
+    }
+    if node.is_missing() {
+        let pos = node.start_position();
+        let text = node.kind();
+        issues.push(SyntaxIssue {
+            line: pos.row + 1,
+            column: pos.column + 1,
+            end_line: pos.row + 1,
+            end_column: pos.column + 2,
+            message: format!("缺少 '{}'", text),
+            kind: "missing".to_string(),
+        });
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_syntax_issues(&child, issues, source);
+    }
+}
+
 /// 提取出的代码符号
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -250,5 +306,58 @@ mod tests {
         let symbols = extract_symbols(code);
         let main_sym = symbols.iter().find(|s| s.name == "main").unwrap();
         assert_eq!(main_sym.line, 3);
+    }
+
+    // ============ check_syntax 测试（功能3d） ============
+
+    #[test]
+    fn check_syntax_valid_code_returns_empty() {
+        let code = "int main() { return 0; }";
+        let issues = check_syntax(code);
+        assert!(issues.is_empty(), "合法代码不应有语法问题: {:?}", issues);
+    }
+
+    #[test]
+    fn check_syntax_missing_semicolon_detects_missing() {
+        let code = "int x";
+        let issues = check_syntax(code);
+        assert!(issues.iter().any(|i| i.kind == "missing"), "应检测到 missing 节点: {:?}", issues);
+    }
+
+    #[test]
+    fn check_syntax_unmatched_brace_detects_missing() {
+        let code = "int main() {";
+        let issues = check_syntax(code);
+        // tree-sitter 对缺少闭合括号插入 missing 节点（缺少 '}'）
+        assert!(issues.iter().any(|i| i.kind == "missing"), "应检测到 missing 节点: {:?}", issues);
+    }
+
+    #[test]
+    fn check_syntax_invalid_code_detects_error() {
+        let code = "this is not c++";
+        let issues = check_syntax(code);
+        assert!(issues.iter().any(|i| i.kind == "error"), "无效代码应检测到 error 节点: {:?}", issues);
+    }
+
+    #[test]
+    fn check_syntax_line_number_is_one_based() {
+        let code = "\n\nint x";
+        let issues = check_syntax(code);
+        let issue = issues.iter().find(|i| i.kind == "missing").expect("应检测到 missing 节点");
+        assert!(issue.line >= 3, "行号应为 1-based 且 >= 3: {}", issue.line);
+    }
+
+    #[test]
+    fn check_syntax_nested_error_detected() {
+        let code = "int main() { int x }";
+        let issues = check_syntax(code);
+        // 函数体内缺少分号也应被检测到
+        assert!(!issues.is_empty(), "嵌套错误应被检测到: {:?}", issues);
+    }
+
+    #[test]
+    fn check_syntax_empty_string_returns_empty() {
+        let issues = check_syntax("");
+        assert!(issues.is_empty(), "空字符串不应有语法问题");
     }
 }
