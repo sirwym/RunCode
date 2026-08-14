@@ -358,7 +358,7 @@ fn query_process_cpu_ms(handle: isize) -> u64 {
 
     unsafe {
         if GetProcessTimes(
-            handle as *mut _,
+            HANDLE(handle as *mut std::ffi::c_void),
             &mut creation,
             &mut exit,
             &mut kernel,
