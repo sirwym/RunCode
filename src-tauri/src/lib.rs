@@ -30,7 +30,9 @@ use run_manager::RunManager;
 #[cfg(target_os = "macos")]
 use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, RunEvent, WebviewWindow};
+use tauri::{Emitter, Manager, WebviewWindow};
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 use tauri_plugin_decoration::WebviewWindowExt;
 
 /// 激活自定义标题栏（tauri-plugin-decoration）
@@ -450,6 +452,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
             // macOS：通过"打开方式"派发 RunEvent::Opened（Apple open-files event，非 argv）
+            #[cfg(target_os = "macos")]
             RunEvent::Opened { urls } => {
                 if let Some(path) = urls.iter().find_map(|u| {
                     if u.scheme() == "file" {
