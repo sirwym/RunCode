@@ -167,6 +167,17 @@ function saveActiveId(id: string | null) {
 // dispose 回调：tab 删除成功后由 useTabs 通知外部（Editor）清理 Monaco model
 let onCloseTabsCb: ((ids: string[]) => void) | null = null;
 
+// openTab inflight 去重：避免同一 path 并发打开时创建多个 tab（async 竞态）
+// 第二次调用同 path 直接复用第一次的 Promise，待第一次完成后走"复用 existing"分支
+const inflightOpen = new Map<string, Promise<string | null>>();
+
+// 关闭确认回调：dirty tab 关闭时由外部（App）渲染弹窗决定 取消/不保存/保存
+export type ConfirmCloseDecision = "cancel" | "discard" | "save";
+export type ConfirmCloseCtx =
+  | { kind: "single"; name: string }
+  | { kind: "all"; count: number };
+let onConfirmCloseCb: ((ctx: ConfirmCloseCtx) => Promise<ConfirmCloseDecision>) | null = null;
+
 interface TabsState {
   tabs: Tab[];
   activeId: string | null;
@@ -183,9 +194,11 @@ interface TabsState {
   setContent: (id: string, content: string) => void;
   setSuiteId: (id: string, suiteId: string) => void;
   activeTab: () => Tab | null;
-  restore: () => Promise<void>;
+  restore: (pendingPath?: string | null) => Promise<void>;
   // 设置 closeTab/closeAll 成功删除 tab 后的回调，外部用于 dispose Monaco model
   setOnCloseTabs: (cb: ((ids: string[]) => void) | null) => void;
+  // 设置关闭确认回调，外部（App）渲染弹窗返回 取消/不保存/保存
+  setOnConfirmClose: (cb: ((ctx: ConfirmCloseCtx) => Promise<ConfirmCloseDecision>) | null) => void;
   // 崩溃恢复（功能2）
   applyRecovery: (tabIds: string[]) => void;
   dismissRecovery: () => void;
@@ -225,6 +238,9 @@ export const useTabs = create<TabsState>((set, get) => ({
   },
 
   openTab: async (path) => {
+    // inflight 去重：同 path 正在打开时复用其 Promise，避免竞态创建多个 tab
+    const inflight = inflightOpen.get(path);
+    if (inflight) return inflight;
     // 复用同 path 的 tab
     const existing = get().tabs.find((t) => t.path === path);
     if (existing) {
@@ -232,40 +248,46 @@ export const useTabs = create<TabsState>((set, get) => ({
       saveActiveId(existing.id);
       return existing.id;
     }
-    try {
-      const result = await invoke<{ path: string; content: string }>("open_file", { path });
-      const id = uuid();
-      const tab: Tab = {
-        id,
-        path: result.path,
-        fileName: basename(result.path),
-        content: result.content,
-        savedContent: result.content,
-        dirty: false,
-        language: "cpp",
-        suiteId: null,
-      };
-      set((s) => ({ tabs: [...s.tabs, tab], activeId: id }));
-      persistTabs(get().tabs);
-      saveActiveId(id);
-      // Fix P2-2：打开文件成功后写入最近文件
+    const p = (async () => {
       try {
-        await invoke("add_recent_file", { path: result.path, name: basename(result.path) });
-      } catch {
-        // 最近文件写入失败不影响主流程
+        const result = await invoke<{ path: string; content: string }>("open_file", { path });
+        const id = uuid();
+        const tab: Tab = {
+          id,
+          path: result.path,
+          fileName: basename(result.path),
+          content: result.content,
+          savedContent: result.content,
+          dirty: false,
+          language: "cpp",
+          suiteId: null,
+        };
+        set((s) => ({ tabs: [...s.tabs, tab], activeId: id }));
+        persistTabs(get().tabs);
+        saveActiveId(id);
+        // Fix P2-2：打开文件成功后写入最近文件
+        try {
+          await invoke("add_recent_file", { path: result.path, name: basename(result.path) });
+        } catch {
+          // 最近文件写入失败不影响主流程
+        }
+        return id;
+      } catch (e) {
+        alertError(e);
+        return null;
+      } finally {
+        inflightOpen.delete(path);
       }
-      return id;
-    } catch (e) {
-      alertError(e);
-      return null;
-    }
+    })();
+    inflightOpen.set(path, p);
+    return p;
   },
 
   openTabDialog: async () => {
     try {
       const selected = await openDialog({
         multiple: false,
-        filters: [{ name: "C++", extensions: ["cpp", "cc", "cxx", "h", "hpp"] }],
+        filters: [{ name: "C++ (*.cpp;*.cc;*.cxx;*.h;*.hpp)", extensions: ["cpp", "cc", "cxx", "h", "hpp"] }],
       });
       if (typeof selected !== "string") return null;
       return await get().openTab(selected);
@@ -279,12 +301,16 @@ export const useTabs = create<TabsState>((set, get) => ({
     const tab = get().tabs.find((t) => t.id === id);
     if (!tab) return;
     if (tab.dirty) {
-      const t = getT();
-      const confirmed = confirm(t("tabs.closeConfirmMsg", { name: tab.fileName }));
-      if (!confirmed) return;
-      // Fix P1-1：检查保存结果，失败或取消另存为则中止关闭
-      const ok = await get().saveTab(id);
-      if (!ok) return;
+      const decision: ConfirmCloseDecision = onConfirmCloseCb
+        ? await onConfirmCloseCb({ kind: "single", name: tab.fileName })
+        : "save";
+      if (decision === "cancel") return;
+      if (decision === "save") {
+        // Fix P1-1：检查保存结果，失败或取消另存为则中止关闭
+        const ok = await get().saveTab(id);
+        if (!ok) return;
+      }
+      // discard：直接进入下方关闭分支
     }
     // Fix P1-2：tab 删除成功后才通过回调通知外部 dispose model
     set((s) => {
@@ -315,16 +341,20 @@ export const useTabs = create<TabsState>((set, get) => ({
   closeAll: async () => {
     const dirtyCount = get().tabs.filter((t) => t.dirty).length;
     if (dirtyCount > 0) {
-      const t = getT();
-      const confirmed = confirm(t("tabs.closeAllConfirmMsg", { count: dirtyCount }));
-      if (!confirmed) return;
-      // Fix P1-1：任一保存失败则中止关闭所有
-      for (const tab of get().tabs) {
-        if (tab.dirty) {
-          const ok = await get().saveTab(tab.id);
-          if (!ok) return;
+      const decision: ConfirmCloseDecision = onConfirmCloseCb
+        ? await onConfirmCloseCb({ kind: "all", count: dirtyCount })
+        : "save";
+      if (decision === "cancel") return;
+      if (decision === "save") {
+        // Fix P1-1：任一保存失败则中止关闭所有
+        for (const tab of get().tabs) {
+          if (tab.dirty) {
+            const ok = await get().saveTab(tab.id);
+            if (!ok) return;
+          }
         }
       }
+      // discard：直接进入下方关闭分支
     }
     // Fix P1-2：先收集所有 tabId，删除后通知外部统一 dispose
     const closedIds = get().tabs.map((t) => t.id);
@@ -379,7 +409,7 @@ export const useTabs = create<TabsState>((set, get) => ({
     try {
       const selected = await saveDialog({
         defaultPath: tab.fileName,
-        filters: [{ name: "C++", extensions: ["cpp"] }],
+        filters: [{ name: "C++ (*.cpp;*.cc;*.cxx;*.h;*.hpp)", extensions: ["cpp", "cc", "cxx", "h", "hpp"] }],
       });
       if (!selected) return false; // 用户取消另存为
       await invoke("save_file", { path: selected, content: tab.content });
@@ -450,10 +480,10 @@ export const useTabs = create<TabsState>((set, get) => ({
     return tabs.find((t) => t.id === activeId) ?? null;
   },
 
-  restore: async () => {
+  restore: async (pendingPath: string | null = null) => {
     const persisted = loadPersistedTabs();
-    if (persisted.length === 0) {
-      // 首次：创建默认 tab，清理所有孤儿 autosave
+    if (persisted.length === 0 && !pendingPath) {
+      // 首次且无待打开文件：创建默认 tab，清理所有孤儿 autosave
       loadAllAutosaves().forEach(({ tabId }) => clearAutosave(tabId));
       get().newTab("cpp");
       return;
@@ -492,16 +522,16 @@ export const useTabs = create<TabsState>((set, get) => ({
         suiteId: meta.suiteId,
       });
     }
-    if (tabs.length === 0) {
-      // 所有文件读取失败：创建默认 tab，清理所有孤儿 autosave
+    if (tabs.length === 0 && !pendingPath) {
+      // 所有文件读取失败且无待打开文件：创建默认 tab，清理所有孤儿 autosave
       loadAllAutosaves().forEach(({ tabId }) => clearAutosave(tabId));
       get().newTab("cpp");
       return;
     }
     const savedActive = loadActiveId();
-    const activeId = savedActive && tabs.find((t) => t.id === savedActive)
+    const activeId = (savedActive && tabs.find((t) => t.id === savedActive)
       ? savedActive
-      : tabs[0].id;
+      : tabs[0]?.id) ?? null;
 
     // 检测 autosave：与当前 content 不同时加入 pendingRecovery（功能2b）
     const autosaves = loadAllAutosaves();
@@ -524,10 +554,19 @@ export const useTabs = create<TabsState>((set, get) => ({
 
     set({ tabs, activeId, pendingRecovery: recoverable.length > 0 ? recoverable : null });
     saveActiveId(activeId);
+
+    // 有待打开文件（文件关联打开）：openTab（inflight 去重保证不重复创建）
+    if (pendingPath) {
+      await get().openTab(pendingPath);
+    }
   },
 
   setOnCloseTabs: (cb) => {
     onCloseTabsCb = cb;
+  },
+
+  setOnConfirmClose: (cb) => {
+    onConfirmCloseCb = cb;
   },
 
   applyRecovery: (tabIds) => {

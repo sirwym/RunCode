@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, act, fireEvent } from "@testing-library/react";
+import { render, act, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { ImperativePanelHandle } from "react-resizable-panels";
 
@@ -1354,5 +1354,95 @@ describe("运行快捷键（App keydown 链路）", () => {
     expect(getActiveTabText(container)).toBe(zh.panel.tests);
     // 且面板应展开（revealPanel 无条件调用 expand）
     expect(expandSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("App 关闭确认弹窗接线", () => {
+  it("mount 注册 onConfirmClose；触发后渲染弹窗，点不保存反馈 discard 并关闭", async () => {
+    resetStores(makeSettings());
+    // 用捕获型 mock 接管 setOnConfirmClose，拿到 App 注入的回调
+    let captured: ((ctx: unknown) => Promise<unknown>) | null = null;
+    useTabs.setState({
+      setOnConfirmClose: vi.fn((cb: unknown) => {
+        captured = cb as ((ctx: unknown) => Promise<unknown>);
+      }) as never,
+    });
+
+    render(<App />);
+    // mount effect 注册回调
+    await waitFor(() => expect(captured).not.toBeNull());
+
+    // 触发 dirty 关闭确认 → 弹窗出现
+    let promise!: Promise<unknown>;
+    await act(async () => {
+      promise = captured!({ kind: "single", name: "x.cpp" });
+    });
+    expect(await screen.findByText("未保存的更改")).toBeTruthy();
+
+    // 点「不保存」→ 反馈 discard + 弹窗关闭
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "不保存" }));
+      await promise;
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("未保存的更改")).toBeNull();
+    });
+    // 确认反馈值为 discard
+    expect(await promise).toBe("discard");
+  });
+});
+
+describe("App 文件关联打开", () => {
+  beforeEach(() => {
+    listenMock.mockClear();
+    resetStores(makeSettings());
+    vi.mocked(invoke).mockReset();
+    // 默认无 pending：get_pending_open_file 返回 undefined（falsy）
+    vi.mocked(invoke).mockResolvedValue(undefined);
+  });
+
+  it("get_pending_open_file 返回路径时把 path 传给 restore", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "get_pending_open_file") return Promise.resolve("/x/a.cpp");
+      return Promise.resolve(undefined);
+    });
+
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    expect(useTabs.getState().restore).toHaveBeenCalledWith("/x/a.cpp");
+  });
+
+  it("get_pending_open_file 返回 null 时 restore 收到 null", async () => {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      if (cmd === "get_pending_open_file") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    expect(useTabs.getState().restore).toHaveBeenCalledWith(null);
+  });
+
+  it("open-file 事件触发调用 openTab", async () => {
+    render(<App />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+    const openTabMock = useTabs.getState().openTab as unknown as ReturnType<typeof vi.fn>;
+    openTabMock.mockClear();
+
+    // 捕获 open-file 事件的回调（App mount 时通过 listen 注册）
+    const handler = listenMock.mock.calls.find((c) => c[0] === "open-file")?.[1] as
+      | ((e: { payload: string }) => void)
+      | undefined;
+    expect(handler).toBeTruthy();
+
+    await act(async () => {
+      handler!({ payload: "/x/b.cpp" });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(openTabMock).toHaveBeenCalledWith("/x/b.cpp");
   });
 });

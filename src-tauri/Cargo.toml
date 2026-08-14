@@ -30,6 +30,10 @@ walkdir = "2"
 tree-sitter = "0.22"
 tree-sitter-cpp = "0.22"
 
+# 桌面平台单实例插件：确保"打开方式"热启动时文件路径转给已运行实例
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
 # Windows 平台依赖（JobObject + GetProcessMemoryInfo + Console 代码页）
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

@@ -29,7 +29,8 @@ use pty::PtyManager;
 use run_manager::RunManager;
 #[cfg(target_os = "macos")]
 use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{Emitter, Manager, WebviewWindow};
+use std::sync::Mutex;
+use tauri::{Emitter, Manager, RunEvent, WebviewWindow};
 use tauri_plugin_decoration::WebviewWindowExt;
 
 /// 激活自定义标题栏（tauri-plugin-decoration）
@@ -66,6 +67,37 @@ fn toggle_devtools(window: WebviewWindow) {
     } else {
         window.open_devtools();
     }
+}
+
+/// 支持通过"打开方式"打开的文件扩展名（与 tauri.conf.json fileAssociations 对齐）
+const LAUNCH_EXTS: &[&str] = &["cpp", "cc", "cxx", "h", "hpp"];
+
+/// 从命令行参数中解析首个匹配关联扩展名的文件路径（纯函数，便于单元测试）
+/// 跳过 argv[0]（程序自身路径），返回首个以 LAUNCH_EXTS 结尾的参数
+fn parse_launch_path(args: &[String]) -> Option<String> {
+    for arg in args.iter().skip(1) {
+        if let Some(ext) = std::path::Path::new(arg)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase)
+        {
+            if LAUNCH_EXTS.contains(&ext.as_str()) {
+                return Some(arg.clone());
+            }
+        }
+    }
+    None
+}
+
+/// 启动期/打开方式传入的待打开文件路径（全局静态，drain-once）
+/// 用全局静态而非 managed state：macOS 冷启动时 RunEvent::Opened 早于 setup（managed state 尚不存在），
+/// 必须用全局静态才能在 Opened 到达时写入。前端 mount 时通过 get_pending_open_file 拉取。
+static STARTUP_FILE: Mutex<Option<String>> = Mutex::new(None);
+
+/// 前端 mount 时拉取待打开文件（drain-once：取后清空，避免重复打开）
+#[tauri::command]
+fn get_pending_open_file() -> Option<String> {
+    STARTUP_FILE.lock().ok().and_then(|mut g| g.take())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -114,8 +146,39 @@ pub fn run() {
             activate_custom_titlebar,
             show_native_fallback,
             toggle_devtools,
+            get_pending_open_file,
         ])
         .setup(|app| {
+            // 注册 single-instance 插件：必须第一个，处理热启动时新实例 args 转发
+            #[cfg(desktop)]
+            {
+                app.handle().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                    // 热启动（Windows/Linux 已运行实例时双击/打开方式）
+                    if let Some(path) = parse_launch_path(&args) {
+                        // 写入全局静态（兜底：前端尚未 mount 或事件丢失时仍可拉取）
+                        if let Ok(mut g) = STARTUP_FILE.lock() {
+                            *g = Some(path.clone());
+                        }
+                        let _ = app.emit("open-file", path);
+                    }
+                    // 聚焦主窗口
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.set_focus();
+                    }
+                }))?;
+            }
+
+            // 冷启动：读 argv（Windows/Linux），macOS 走 RunEvent::Opened（早于 setup，靠全局静态兜底）
+            #[cfg(desktop)]
+            {
+                let args: Vec<String> = std::env::args().collect();
+                if let Some(path) = parse_launch_path(&args) {
+                    if let Ok(mut g) = STARTUP_FILE.lock() {
+                        *g = Some(path);
+                    }
+                }
+            }
+
             // macOS 保留原生系统菜单栏；Windows 移除原生菜单，用前端菜单栏替代
             #[cfg(target_os = "macos")]
             {
@@ -385,9 +448,27 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
+        .run(|app_handle, event| match event {
+            // macOS：通过"打开方式"派发 RunEvent::Opened（Apple open-files event，非 argv）
+            RunEvent::Opened { urls } => {
+                if let Some(path) = urls.iter().find_map(|u| {
+                    if u.scheme() == "file" {
+                        u.to_file_path().ok()
+                    } else {
+                        None
+                    }
+                }) {
+                    let path_str = path.to_string_lossy().to_string();
+                    // 全局静态：macOS 冷启动时 Opened 早于 setup，managed state 尚不存在，
+                    // 必须用全局静态才能在此处写入；前端 mount 时通过 get_pending_open_file 拉取
+                    if let Ok(mut g) = STARTUP_FILE.lock() {
+                        *g = Some(path_str.clone());
+                    }
+                    let _ = app_handle.emit("open-file", path_str);
+                }
+            }
             // 应用退出时清理所有 PTY 子进程和运行会话，防止残留
-            if let tauri::RunEvent::Exit = event {
+            tauri::RunEvent::Exit => {
                 if let Some(pm) = app_handle.try_state::<PtyManager>() {
                     pm.kill_all();
                 }
@@ -395,6 +476,7 @@ pub fn run() {
                     rm.cancel_all();
                 }
             }
+            _ => {}
         });
 }
 
@@ -496,4 +578,107 @@ pub fn update_view_menu_state_inner(
         update_auto_hide_state(app, auto_hide_val)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_launch_path_empty_args() {
+        assert_eq!(parse_launch_path(&[]), None);
+    }
+
+    #[test]
+    fn parse_launch_path_only_program() {
+        // argv[0] 是程序自身路径，应被跳过
+        assert_eq!(parse_launch_path(&["/usr/bin/runcode".to_string()]), None);
+    }
+
+    #[test]
+    fn parse_launch_path_no_match() {
+        // 无关联扩展名
+        assert_eq!(
+            parse_launch_path(&["prog".to_string(), "/x/readme.txt".to_string()]),
+            None
+        );
+        assert_eq!(
+            parse_launch_path(&["prog".to_string(), "--flag".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_launch_path_cpp() {
+        assert_eq!(
+            parse_launch_path(&[
+                "prog".to_string(),
+                "/Users/a/solution.cpp".to_string()
+            ]),
+            Some("/Users/a/solution.cpp".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_launch_path_case_insensitive() {
+        // Windows 文件系统大小写不敏感，扩展名匹配应大小写无关
+        assert_eq!(
+            parse_launch_path(&["prog".to_string(), "C:\\x\\A.CPP".to_string()]),
+            Some("C:\\x\\A.CPP".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_launch_path_multiple_exts() {
+        // 关联的所有扩展名都应匹配
+        assert_eq!(
+            parse_launch_path(&["prog".to_string(), "/x/header.hpp".to_string()]),
+            Some("/x/header.hpp".to_string())
+        );
+        assert_eq!(
+            parse_launch_path(&["prog".to_string(), "/x/main.cxx".to_string()]),
+            Some("/x/main.cxx".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_launch_path_first_match_wins() {
+        // 多个匹配取首个
+        assert_eq!(
+            parse_launch_path(&[
+                "prog".to_string(),
+                "/x/a.cpp".to_string(),
+                "/x/b.cpp".to_string()
+            ]),
+            Some("/x/a.cpp".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_launch_path_skip_flags_before_file() {
+        // 跳过非文件参数（如 --flag），仍能找到后续文件
+        assert_eq!(
+            parse_launch_path(&[
+                "prog".to_string(),
+                "--verbose".to_string(),
+                "/x/a.cpp".to_string()
+            ]),
+            Some("/x/a.cpp".to_string())
+        );
+    }
+
+    #[test]
+    fn startup_file_drain_once() {
+        // 清空可能残留的全局状态（cargo test 多线程，避免上次残留干扰）
+        *STARTUP_FILE.lock().unwrap() = None;
+        // 全局静态：首次取出 Some，二次取出 None（drain-once 语义）
+        *STARTUP_FILE.lock().unwrap() = Some("x.cpp".to_string());
+        assert_eq!(
+            STARTUP_FILE.lock().unwrap().take(),
+            Some("x.cpp".to_string())
+        );
+        assert_eq!(STARTUP_FILE.lock().unwrap().take(), None);
+        // 测试后清空，避免影响其他测试
+        *STARTUP_FILE.lock().unwrap() = None;
+    }
 }

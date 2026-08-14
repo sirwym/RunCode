@@ -45,6 +45,14 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "nsis"],
+    "fileAssociations": [
+      {
+        "ext": ["cpp", "cc", "cxx", "h", "hpp"],
+        "mimeType": "text/x-c++src",
+        "role": "Editor",
+        "rank": "Default"
+      }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -91,6 +91,31 @@ pub enum TestProgress {
     },
 }
 
+/// 测试判定诊断信息（轻量，发送到 DevTools Console 辅助排查）。
+/// 每例均发送元数据摘要；仅在失败且输出较小时附带转义后的全文。
+const JUDGE_INLINE_MAX: usize = 4096;
+
+#[derive(Serialize, Clone)]
+struct TestJudgeInfo {
+    case_id: String,
+    index: usize,
+    total: usize,
+    /// 最终生效的严格模式（case.strict || 全局 strict）
+    case_strict: bool,
+    exit_code: Option<i32>,
+    duration_ms: u64,
+    time_limit_ms: u64,
+    time_exceeded: bool,
+    passed: bool,
+    first_diff: Option<usize>,
+    norm_equal: bool,
+    expected_len: usize,
+    actual_len: usize,
+    /// 失败且输出较小时附带的转义全文（空格=· 换行=\n 回车=\r 制表=\t）；否则 None
+    expected_esc: Option<String>,
+    actual_esc: Option<String>,
+}
+
 /// 标准化输出用于比较。
 /// - 始终 CRLF→LF（跨平台一致性）
 /// - strict=false（默认）：去掉末尾换行，教学场景更友好
@@ -369,6 +394,43 @@ async fn run_tests_inner(
         } else {
             first_diff_index(&expected_norm, &actual_norm)
         };
+
+        // 轻量诊断信息 → DevTools Console（详见 useRunManager 监听）
+        let time_exceeded = run_out.duration_ms > config.test_time_limit_ms;
+        let inline = !passed
+            && expected.len() < JUDGE_INLINE_MAX
+            && stdout.len() < JUDGE_INLINE_MAX;
+        let (expected_esc, actual_esc) = if inline {
+            let esc = |s: &str| {
+                s.replace('\r', "\\r")
+                    .replace('\n', "\\n")
+                    .replace('\t', "\\t")
+                    .replace(' ', "·")
+            };
+            (Some(esc(&expected)), Some(esc(&stdout)))
+        } else {
+            (None, None)
+        };
+        let _ = app.emit(
+            "test_judge_info",
+            TestJudgeInfo {
+                case_id: case.id.clone(),
+                index,
+                total,
+                case_strict,
+                exit_code: run_out.exit_code,
+                duration_ms: run_out.duration_ms,
+                time_limit_ms: config.test_time_limit_ms,
+                time_exceeded,
+                passed,
+                first_diff,
+                norm_equal: expected_norm == actual_norm,
+                expected_len: expected.len(),
+                actual_len: stdout.len(),
+                expected_esc,
+                actual_esc,
+            },
+        );
 
         if passed {
             passed_count += 1;

@@ -17,6 +17,27 @@ export interface PtyExitInfo {
   maxRssKb: number | null;
 }
 
+// 测试判定诊断信息（与后端 test_judge_info 事件对应，发往 DevTools Console）
+export interface TestJudgeInfo {
+  case_id: string;
+  index: number;
+  total: number;
+  /** 最终生效的严格模式（case.strict || 全局 strict） */
+  case_strict: boolean;
+  exit_code: number | null;
+  duration_ms: number;
+  time_limit_ms: number;
+  time_exceeded: boolean;
+  passed: boolean;
+  first_diff: number | null;
+  norm_equal: boolean;
+  expected_len: number;
+  actual_len: number;
+  /** 失败且输出较小时附带的转义全文（空格=· 换行=\n 等）；否则 null */
+  expected_esc: string | null;
+  actual_esc: string | null;
+}
+
 // 把后端 AppError（{code, params}）或任意异常转为本地化文案
 function localizeError(e: unknown): string {
   const t = getT();
@@ -216,9 +237,23 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
 
     // 监听逐例进度
     let unlisten: UnlistenFn | null = null;
+    // 监听判定诊断信息，打印到 DevTools Console 辅助排查
+    let unlistenJudge: UnlistenFn | null = null;
     try {
       unlisten = await listen<TestProgress>("test_progress", (e) => {
         set({ testProgress: e.payload });
+      });
+      unlistenJudge = await listen<TestJudgeInfo>("test_judge_info", (e) => {
+        const p = e.payload;
+        const tag = p.passed ? "PASS" : "FAIL";
+        console.log(
+          `[Judge ${p.index + 1}/${p.total}] ${tag} case=${p.case_id} strict=${p.case_strict} exit=${p.exit_code} ${p.duration_ms}/${p.time_limit_ms}ms${p.time_exceeded ? " TLE" : ""} diff=${p.first_diff} eq=${p.norm_equal} len=${p.expected_len}/${p.actual_len}`,
+        );
+        if (p.expected_esc != null && p.actual_esc != null) {
+          console.log(`  expected: [${p.expected_esc}]  actual: [${p.actual_esc}]`);
+        } else if (!p.passed) {
+          console.log("  (输出较大，使用「对比差异」查看)");
+        }
       });
     } catch (err) {
       console.warn("[useRunManager] test_progress 监听注册失败，测试进度将无反馈", err);
@@ -229,6 +264,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
     // 这里检查后跳过 invoke，避免后端开始跑而前端已经 idle。
     if (get().activeRunId !== runId) {
       if (unlisten) unlisten();
+      if (unlistenJudge) unlistenJudge();
       return;
     }
 
@@ -295,6 +331,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       });
     } finally {
       if (unlisten) unlisten();
+      if (unlistenJudge) unlistenJudge();
     }
   },
 

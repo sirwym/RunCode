@@ -17,11 +17,13 @@ import SettingsPanel from "./components/SettingsPanel";
 import RecentFilesDialog from "./components/RecentFilesDialog";
 import CheatsheetDialog from "./components/CheatsheetDialog";
 import RecoveryDialog from "./components/RecoveryDialog";
+import ConfirmCloseDialog from "./components/ConfirmCloseDialog";
 import TitleBar from "./components/TitleBar";
 import { useRunManager } from "./hooks/useRunManager";
 import { useTestOptions } from "./hooks/useTestOptions";
 import { useTestSuite } from "./hooks/useTestSuite";
 import { useTabs } from "./hooks/useTabs";
+import type { ConfirmCloseCtx, ConfirmCloseDecision } from "./hooks/useTabs";
 import { useSettings } from "./hooks/useSettings";
 import { useI18n, getT } from "./hooks/useI18n";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -175,6 +177,25 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [recentOpen, setRecentOpen] = useState(false);
   const [cheatsheetOpen, setCheatsheetOpen] = useState(false);
+  const [closeConfirm, setCloseConfirm] = useState<{
+    open: boolean;
+    ctx: ConfirmCloseCtx;
+  }>({ open: false, ctx: { kind: "single", name: "" } });
+  const closeResolverRef = useRef<((r: ConfirmCloseDecision) => void) | null>(null);
+
+  // 关闭确认弹窗：由 useTabs 在 dirty tab 关闭时调用，返回用户决策
+  const onConfirmClose = useCallback((ctx: ConfirmCloseCtx) => {
+    setCloseConfirm({ open: true, ctx });
+    return new Promise<ConfirmCloseDecision>((resolve) => {
+      closeResolverRef.current = resolve;
+    });
+  }, []);
+
+  const handleCloseConfirmResult = useCallback((r: ConfirmCloseDecision) => {
+    closeResolverRef.current?.(r);
+    closeResolverRef.current = null;
+    setCloseConfirm((s) => ({ ...s, open: false }));
+  }, []);
   // 输出面板折叠状态（由 collapse()/expand() 触发，由 onCollapse/onExpand 同步）
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   // 光标位置（用于 StatusBar 显示 Ln/Col）
@@ -249,11 +270,45 @@ function App() {
   const handlersRef = useRef({ newTab, openTabDialog, saveTab, saveTabAs, closeTab, closeAll });
   handlersRef.current = { newTab, openTabDialog, saveTab, saveTabAs, closeTab, closeAll };
 
-  // 启动时恢复 tabs
+  // 启动：drain pending 文件 → 传给 restore
+  // - 有 pending：restore 不创建默认"未命名"tab，末尾 openTab(pending) 打开关联文件
+  // - 无 pending：restore 恢复持久化 tabs 或创建默认 tab
   useEffect(() => {
-    void restoreTabs();
-    void loadSettings();
+    let cancelled = false;
+    const init = async () => {
+      let pendingPath: string | null = null;
+      try {
+        pendingPath = await invoke<string | null>("get_pending_open_file");
+      } catch {
+        // command 不存在或调用失败，忽略
+      }
+      if (cancelled) return;
+      await restoreTabs(pendingPath);
+      void loadSettings();
+    };
+    void init();
+    return () => { cancelled = true; };
   }, [restoreTabs, loadSettings]);
+
+  // 文件关联打开：仅监听 open-file 事件（"打开方式"热启动，已运行实例收到新文件）
+  // - 冷启动 pending 由上方启动 useEffect drain 并交给 restore 处理
+  // - openTab 内部 inflight 去重，重复送达不会重复打开
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let disposed = false;
+    const setup = async () => {
+      const ul = await listen<string>("open-file", (e) => {
+        if (e.payload) void openTab(e.payload);
+      });
+      if (disposed) { ul(); return; }
+      unlisten = ul;
+    };
+    void setup();
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+    };
+  }, [openTab]);
 
   // 同步 Rust settings 的 locale 到前端 i18n store
   useEffect(() => {
@@ -270,10 +325,12 @@ function App() {
         editorRef.current?.disposeModel(id);
       }
     });
+    useTabs.getState().setOnConfirmClose(onConfirmClose);
     return () => {
       useTabs.getState().setOnCloseTabs(null);
+      useTabs.getState().setOnConfirmClose(null);
     };
-  }, []);
+  }, [onConfirmClose]);
 
   // 更新设置并持久化（用 getState 读最新 settings，避免闭包陈旧）
   const updateSettings = useCallback((partial: Partial<AppSettings>) => {
@@ -1100,6 +1157,13 @@ function App() {
         onOpenPath={handleOpenRecentPath}
       />
       <CheatsheetDialog open={cheatsheetOpen} onClose={() => setCheatsheetOpen(false)} />
+      <ConfirmCloseDialog
+        open={closeConfirm.open}
+        mode={closeConfirm.ctx.kind}
+        fileName={closeConfirm.ctx.kind === "single" ? closeConfirm.ctx.name : undefined}
+        count={closeConfirm.ctx.kind === "all" ? closeConfirm.ctx.count : undefined}
+        onResult={handleCloseConfirmResult}
+      />
       {pendingRecovery && pendingRecovery.length > 0 && (
         <RecoveryDialog
           tabs={pendingRecovery}
