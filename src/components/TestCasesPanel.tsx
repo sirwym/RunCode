@@ -5,7 +5,7 @@ import { useRunManager } from "../hooks/useRunManager";
 import { useTestOptions } from "../hooks/useTestOptions";
 import { useI18n } from "../hooks/useI18n";
 import { getT } from "../hooks/useI18n";
-import { X, FolderOpen, FileArchive, Plus, Square, Play, Upload, Check, AlertTriangle, GitCompare } from "lucide-react";
+import { X, FolderOpen, FileArchive, Plus, Square, Play, Upload, Check, AlertTriangle, GitCompare, Clock } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -13,13 +13,25 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import DiffDialog from "./DiffDialog";
-import type { CasePreview, TestCaseResult, KillReason, AppErrorPayload } from "../types";
+import type { CasePreview, TestCaseResult, KillReason, AppErrorPayload, Verdict } from "../types";
 
 // 格式化文件大小
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// verdict → {className, icon, labelKey, shortLabelKey} 映射
+function verdictBadge(verdict: Verdict): { className: string; icon: React.ReactNode; labelKey: string; shortLabelKey: string } {
+  switch (verdict) {
+    case "ac":  return { className: "badge-ac",  icon: <Check size={12} />,         labelKey: "tests.verdictAc",  shortLabelKey: "tests.verdictAcShort" };
+    case "wa":  return { className: "badge-wa",  icon: <X size={12} />,             labelKey: "tests.verdictWa",  shortLabelKey: "tests.verdictWaShort" };
+    case "tle": return { className: "badge-tle", icon: <Clock size={12} />,         labelKey: "tests.verdictTle", shortLabelKey: "tests.verdictTleShort" };
+    case "re":  return { className: "badge-re",  icon: <AlertTriangle size={12} />, labelKey: "tests.verdictRe",  shortLabelKey: "tests.verdictReShort" };
+    case "ole": return { className: "badge-ole", icon: <AlertTriangle size={12} />, labelKey: "tests.verdictOle", shortLabelKey: "tests.verdictOleShort" };
+    case "uke": return { className: "badge-uke", icon: <AlertTriangle size={12} />, labelKey: "tests.verdictUke", shortLabelKey: "tests.verdictUkeShort" };
+  }
 }
 
 interface CardProps {
@@ -146,13 +158,19 @@ const TestCaseCard = memo(function TestCaseCard({
           disabled={isLarge}
           placeholder={t("tests.namePlaceholder")}
         />
-        {result && (
-          <span className={"testcase-badge " + (result.passed ? "badge-pass" : "badge-fail")}>
-            {result.passed ? <><Check size={12} /> {t("tests.badgePass")}</> : <><X size={12} /> {t("tests.badgeFail")}</>}
-          </span>
+        {result && result.verdict && (
+          (() => {
+            const v = verdictBadge(result.verdict);
+            const tipKey = "tests.verdict" + result.verdict.charAt(0).toUpperCase() + result.verdict.slice(1) + "Tip";
+            return (
+              <span className={"testcase-badge " + v.className} title={t(tipKey)}>
+                {v.icon} {t(v.labelKey)} {t(v.shortLabelKey)}
+              </span>
+            );
+          })()
         )}
         {result && (
-          <span className="testcase-duration">{result.duration_ms} ms</span>
+          <span className="testcase-duration" title={t("tests.cpuTimeTip")}>{result.duration_ms} ms</span>
         )}
         {isCurrent && <span className="testcase-running-dot" />}
         <span className="testcase-spacer" />

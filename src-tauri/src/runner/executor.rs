@@ -38,6 +38,10 @@ pub struct RunOutput {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub duration_ms: u64,
+    /// 子进程 CPU 时间（用户态+内核态，ms）
+    /// 用于 TLE 判定（排除 fork/exec/dyld 冷启动开销）
+    /// 超时/取消路径若无法采集则记为 0
+    pub cpu_ms: u64,
     pub killed_by: Option<KillReason>,
     pub truncated: bool,
     /// 子进程内存峰值（KB）

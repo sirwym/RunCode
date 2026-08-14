@@ -213,6 +213,12 @@ pub async fn run_with_limits(
         killed_by = Some(KillReason::Signal);
     }
 
+    // 采集 CPU 时间（child 尚未 drop，raw_handle 仍有效）
+    let cpu_ms = child
+        .raw_handle()
+        .map(|h| query_process_cpu_ms(h as isize))
+        .unwrap_or(0);
+
     // h_job 在函数返回时由 SendHandle::Drop 自动关闭（KILL_ON_JOB_CLOSE 确保子进程已被杀）
 
     Ok(RunOutput {
@@ -220,6 +226,7 @@ pub async fn run_with_limits(
         stdout: stdout_bytes,
         stderr: stderr_bytes,
         duration_ms: start.elapsed().as_millis() as u64,
+        cpu_ms,
         killed_by,
         truncated: stdout_trunc_v || stderr_trunc_v,
         max_rss_kb,
@@ -334,6 +341,37 @@ pub fn query_process_rss_kb(pid: u32) -> Option<u64> {
             Some(counters.PeakWorkingSetSize as u64 / 1024)
         } else {
             None
+        }
+    }
+}
+
+/// 查询指定进程的 CPU 时间（用户态+内核态，ms）。
+/// 用 GetProcessTimes 读取。进程已退出但 handle 未关闭时仍可读取。
+fn query_process_cpu_ms(handle: isize) -> u64 {
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::System::Threading::GetProcessTimes;
+
+    let mut creation: FILETIME = unsafe { std::mem::zeroed() };
+    let mut exit: FILETIME = unsafe { std::mem::zeroed() };
+    let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+    let mut user: FILETIME = unsafe { std::mem::zeroed() };
+
+    unsafe {
+        if GetProcessTimes(
+            handle as *mut _,
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+        .is_ok()
+        {
+            // FILETIME 是 100ns 单位，转 ms
+            let kernel_100ns = *(std::ptr::addr_of!(kernel).cast::<u64>());
+            let user_100ns = *(std::ptr::addr_of!(user).cast::<u64>());
+            (kernel_100ns + user_100ns) / 10_000
+        } else {
+            0
         }
     }
 }

@@ -181,6 +181,36 @@ describe("i18n 完整性", () => {
     });
   });
 
+  // OI 评测结果分类（Verdict）新增的 i18n key
+  describe("Verdict 评测结果分类 key", () => {
+    const requiredVerdictKeys = [
+      "tests.verdictAc",
+      "tests.verdictWa",
+      "tests.verdictTle",
+      "tests.verdictRe",
+      "tests.verdictOle",
+      "tests.verdictUke",
+      "tests.verdictAcShort",
+      "tests.verdictWaShort",
+      "tests.verdictTleShort",
+      "tests.verdictReShort",
+      "tests.verdictOleShort",
+      "tests.verdictUkeShort",
+      "tests.verdictAcTip",
+      "tests.verdictWaTip",
+      "tests.verdictTleTip",
+      "tests.verdictReTip",
+      "tests.verdictOleTip",
+      "tests.verdictUkeTip",
+      "tests.cpuTimeTip",
+    ];
+
+    it.each(requiredVerdictKeys)("zh 与 en 都包含 %s", (k) => {
+      expect(getByPath(zh, k), `zh 缺少 ${k}`).toBeTypeOf("string");
+      expect(getByPath(en, k), `en 缺少 ${k}`).toBeTypeOf("string");
+    });
+  });
+
   // 控制流图（CFG）功能新增的 i18n key
   describe("CFG 控制流图 key", () => {
     const requiredFlowchartKeys = [

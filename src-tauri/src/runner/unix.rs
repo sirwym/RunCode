@@ -84,6 +84,21 @@ pub fn get_children_rusage_max_rss_kb() -> u64 {
     }
 }
 
+/// 读取 RUSAGE_CHILDREN 的 CPU 时间（用户态+内核态），返回 ms。
+/// 用于差值法采集单次子进程的 CPU 时间。
+pub fn get_children_cpu_ms() -> u64 {
+    unsafe {
+        let mut ru: libc::rusage = std::mem::zeroed();
+        if libc::getrusage(libc::RUSAGE_CHILDREN, &mut ru) == 0 {
+            let user_ms = (ru.ru_utime.tv_sec as u64) * 1000 + (ru.ru_utime.tv_usec as u64) / 1000;
+            let sys_ms = (ru.ru_stime.tv_sec as u64) * 1000 + (ru.ru_stime.tv_usec as u64) / 1000;
+            user_ms + sys_ms
+        } else {
+            0
+        }
+    }
+}
+
 /// 查询指定 PID 的当前 RSS（KB）。
 /// macOS 用 proc_pid_rusage（精确到具体 PID）；
 /// Linux 无此 API，返回 None（由现有 RUSAGE_CHILDREN 差值法兜底）。
@@ -92,13 +107,13 @@ pub fn query_proc_pid_rss_kb(pid: i32) -> Option<u64> {
     proc_rusage::query_pid_resident_bytes(pid).map(|b| b / 1024)
 }
 
-/// 等待子进程退出并采集 max_rss_kb。
+/// 等待子进程退出并采集 max_rss_kb 和 cpu_ms。
 /// - macOS: 轮询 proc_pid_rusage 取 ri_resident_size 的最大值（精确到具体 PID）
 /// - Linux/其他 Unix: 保留 RUSAGE_CHILDREN 差值法（已知不可靠，Linux 不在正式支持范围）
-/// 返回 (exit_status_result, max_rss_kb)
+/// 返回 (exit_status_result, max_rss_kb, cpu_ms)
 async fn wait_with_rusage(
     child: &mut tokio::process::Child,
-) -> (io::Result<std::process::ExitStatus>, u64) {
+) -> (io::Result<std::process::ExitStatus>, u64, u64) {
     #[cfg(target_os = "macos")]
     {
         wait_with_rusage_macos(child).await
@@ -106,14 +121,17 @@ async fn wait_with_rusage(
     #[cfg(not(target_os = "macos"))]
     {
         let baseline = get_children_rusage_max_rss_kb();
+        let cpu_baseline = get_children_cpu_ms();
         let status = child.wait().await;
         let after = get_children_rusage_max_rss_kb();
+        let cpu_after = get_children_cpu_ms();
         let max_rss_kb = if after > baseline {
             after - baseline
         } else {
             0
         };
-        (status, max_rss_kb)
+        let cpu_ms = cpu_after.saturating_sub(cpu_baseline);
+        (status, max_rss_kb, cpu_ms)
     }
 }
 
@@ -123,7 +141,7 @@ async fn wait_with_rusage(
 #[cfg(target_os = "macos")]
 async fn wait_with_rusage_macos(
     child: &mut tokio::process::Child,
-) -> (io::Result<std::process::ExitStatus>, u64) {
+) -> (io::Result<std::process::ExitStatus>, u64, u64) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
 
@@ -161,10 +179,13 @@ async fn wait_with_rusage_macos(
         let _ = mem_tx.send(max_rss);
     });
 
+    let cpu_baseline = get_children_cpu_ms();
     let status = child.wait().await;
     exit_flag.store(true, Ordering::Relaxed);
     let max_rss_kb = mem_rx.recv().unwrap_or(0);
-    (status, max_rss_kb)
+    let cpu_after = get_children_cpu_ms();
+    let cpu_ms = cpu_after.saturating_sub(cpu_baseline);
+    (status, max_rss_kb, cpu_ms)
 }
 
 /// 在 pre_exec（fork 后、exec 前）中设置资源限制。
@@ -221,6 +242,7 @@ pub async fn run_with_limits(
     }
 
     let start = Instant::now();
+    let cpu_baseline = get_children_cpu_ms();
 
     let mut command = Command::new(&cmd[0]);
     command
@@ -269,10 +291,12 @@ pub async fn run_with_limits(
     // 三路竞速：子进程结束 / 墙钟超时 / 外部取消
     let mut killed_by: Option<KillReason> = None;
     let mut max_rss_kb: u64 = 0;
+    let cpu_ms: u64;
     let exit_status_result = if let Some(cancel_token) = cancel_token {
         tokio::select! {
-            (status, rss) = wait_with_rusage(&mut child) => {
+            (status, rss, cpu) = wait_with_rusage(&mut child) => {
                 max_rss_kb = rss;
+                cpu_ms = cpu;
                 Some(status)
             }
             _ = tokio::time::sleep(timeout) => {
@@ -286,6 +310,8 @@ pub async fn run_with_limits(
                 kill_process_group(pgid);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Timeout);
+                let cpu_after = get_children_cpu_ms();
+                cpu_ms = cpu_after.saturating_sub(cpu_baseline);
                 None
             }
             _ = cancel_token.cancelled() => {
@@ -298,14 +324,17 @@ pub async fn run_with_limits(
                 kill_process_group(pgid);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Cancelled);
+                let cpu_after = get_children_cpu_ms();
+                cpu_ms = cpu_after.saturating_sub(cpu_baseline);
                 None
             }
         }
     } else {
         // 无取消信号（单元测试路径）
         tokio::select! {
-            (status, rss) = wait_with_rusage(&mut child) => {
+            (status, rss, cpu) = wait_with_rusage(&mut child) => {
                 max_rss_kb = rss;
+                cpu_ms = cpu;
                 Some(status)
             }
             _ = tokio::time::sleep(timeout) => {
@@ -318,6 +347,8 @@ pub async fn run_with_limits(
                 kill_process_group(pgid);
                 let _ = child.wait().await;
                 killed_by = Some(KillReason::Timeout);
+                let cpu_after = get_children_cpu_ms();
+                cpu_ms = cpu_after.saturating_sub(cpu_baseline);
                 None
             }
         }
@@ -367,6 +398,7 @@ pub async fn run_with_limits(
         stdout: stdout_bytes,
         stderr: stderr_bytes,
         duration_ms: start.elapsed().as_millis() as u64,
+        cpu_ms,
         killed_by,
         truncated: stdout_trunc || stderr_trunc,
         max_rss_kb,

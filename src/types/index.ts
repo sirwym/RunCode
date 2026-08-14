@@ -90,14 +90,21 @@ export interface CasePreview {
 
 // ============ 测试运行结果 ============
 
+/// OI 评测结果分类（与后端 Verdict 对应）
+export type Verdict = "ac" | "wa" | "tle" | "re" | "ole" | "uke";
+
 // 与 Rust 端 commands/test_runner.rs 的 TestCaseResult 对应
 export interface TestCaseResult {
   id: string;
   passed: boolean;
+  /** OI 评测结果分类 */
+  verdict: Verdict;
   stdout: string;
   stderr: string;
   exit_code: number | null;
   duration_ms: number;
+  /** 子进程 CPU 时间（ms），用于 TLE 判定 */
+  cpu_ms: number;
   killed_by: KillReason | null;
   truncated: boolean;
   first_diff: number | null;
@@ -124,8 +131,8 @@ export interface TestRunResult {
 // test_progress 事件（与 Rust 端 TestProgress 对应，tag = "status"）
 export type TestProgress =
   | { status: "running"; run_id: string; case_id: string; index: number; total: number }
-  | { status: "passed"; run_id: string; case_id: string; index: number; total: number; duration_ms: number }
-  | { status: "failed"; run_id: string; case_id: string; index: number; total: number; duration_ms: number; first_diff: number | null }
+  | { status: "passed"; run_id: string; case_id: string; index: number; total: number; duration_ms: number; verdict: Verdict }
+  | { status: "failed"; run_id: string; case_id: string; index: number; total: number; duration_ms: number; first_diff: number | null; verdict: Verdict }
   | { status: "cancelled"; run_id: string; index: number; total: number };
 
 // ============ 批量导入 ============

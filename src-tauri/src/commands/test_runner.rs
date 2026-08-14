@@ -20,15 +20,77 @@ fn filter_cases<'a>(cases: &'a [CaseMeta], case_ids: Option<&[String]>) -> Vec<&
         .collect()
 }
 
+/// OI 评测结果分类
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// Accept，程序通过
+    Ac,
+    /// Wrong Answer，答案错误
+    Wa,
+    /// Time Limit Exceeded，超出时间限制
+    Tle,
+    /// Runtime Error，运行时错误
+    Re,
+    /// Output Limit Exceeded，输出超过限制
+    Ole,
+    /// Unknown Error，未知错误
+    Uke,
+}
+
+/// 判定测试用例的 OI 评测结果分类（纯函数，便于单元测试）
+///
+/// 优先级：TLE > RE > OLE > WA > UKE
+/// - passed=true → AC
+/// - CPU 时间超限 或 killed_by=Timeout → TLE
+/// - killed_by=Signal 或 exit_code 非 0 → RE
+/// - truncated=true → OLE
+/// - exit_code=0 且输出不匹配 → WA
+/// - 其他异常 → UKE
+fn classify_verdict(
+    passed: bool,
+    exit_code: Option<i32>,
+    cpu_ms: u64,
+    time_limit_ms: u64,
+    killed_by: Option<KillReason>,
+    truncated: bool,
+) -> Verdict {
+    if passed {
+        return Verdict::Ac;
+    }
+    // TLE 优先（超时被杀时 exit_code 也可能非 0）
+    if cpu_ms > time_limit_ms || matches!(killed_by, Some(KillReason::Timeout)) {
+        return Verdict::Tle;
+    }
+    // RE：被信号杀或非零退出
+    if matches!(killed_by, Some(KillReason::Signal)) || (exit_code.is_some() && exit_code != Some(0)) {
+        return Verdict::Re;
+    }
+    // OLE：输出被截断
+    if truncated {
+        return Verdict::Ole;
+    }
+    // WA：退出码 0、未超时、未截断、未被杀，但 passed=false → 输出不匹配
+    if exit_code == Some(0) {
+        return Verdict::Wa;
+    }
+    // exit_code 为 None 且非上述情况 → 未知
+    Verdict::Uke
+}
+
 /// 单个测试用例的运行结果
 #[derive(Serialize, Clone)]
 pub struct TestCaseResult {
     pub id: String,
     pub passed: bool,
+    /// OI 评测结果分类
+    pub verdict: Verdict,
     pub stdout: String,
     pub stderr: String,
     pub exit_code: Option<i32>,
     pub duration_ms: u64,
+    /// 子进程 CPU 时间（ms），用于 TLE 判定
+    pub cpu_ms: u64,
     pub killed_by: Option<KillReason>,
     pub truncated: bool,
     /// 首次差异位置（标准化后字符串中的字符索引）；通过时为 None
@@ -73,6 +135,7 @@ pub enum TestProgress {
         index: usize,
         total: usize,
         duration_ms: u64,
+        verdict: Verdict,
     },
     /// 用例失败
     Failed {
@@ -82,6 +145,7 @@ pub enum TestProgress {
         total: usize,
         duration_ms: u64,
         first_diff: Option<usize>,
+        verdict: Verdict,
     },
     /// 运行被取消
     Cancelled {
@@ -138,16 +202,16 @@ fn normalize_output(s: &str, strict: bool) -> String {
 
 /// 判断测试用例是否通过（纯函数，便于单元测试）
 ///
-/// 通过条件：exit_code == 0 && 输出匹配 && 未超时
+/// 通过条件：exit_code == 0 && 输出匹配 && CPU 时间未超限
 fn judge_case_passed(
     exit_code: Option<i32>,
     expected: &str,
     actual: &str,
-    duration_ms: u64,
+    cpu_ms: u64,
     time_limit_ms: u64,
     strict: bool,
 ) -> bool {
-    let time_exceeded = duration_ms > time_limit_ms;
+    let time_exceeded = cpu_ms > time_limit_ms;
     let expected_norm = normalize_output(expected, strict);
     let actual_norm = normalize_output(actual, strict);
     exit_code == Some(0) && expected_norm == actual_norm && !time_exceeded
@@ -383,9 +447,17 @@ async fn run_tests_inner(
             run_out.exit_code,
             &expected,
             &stdout,
-            run_out.duration_ms,
+            run_out.cpu_ms,
             config.test_time_limit_ms,
             case_strict,
+        );
+        let verdict = classify_verdict(
+            passed,
+            run_out.exit_code,
+            run_out.cpu_ms,
+            config.test_time_limit_ms,
+            run_out.killed_by.clone(),
+            run_out.truncated,
         );
         let expected_norm = normalize_output(&expected, case_strict);
         let actual_norm = normalize_output(&stdout, case_strict);
@@ -396,7 +468,7 @@ async fn run_tests_inner(
         };
 
         // 轻量诊断信息 → DevTools Console（详见 useRunManager 监听）
-        let time_exceeded = run_out.duration_ms > config.test_time_limit_ms;
+        let time_exceeded = run_out.cpu_ms > config.test_time_limit_ms;
         let inline = !passed
             && expected.len() < JUDGE_INLINE_MAX
             && stdout.len() < JUDGE_INLINE_MAX;
@@ -442,6 +514,7 @@ async fn run_tests_inner(
                     index,
                     total,
                     duration_ms: run_out.duration_ms,
+                    verdict,
                 },
             );
         } else {
@@ -454,6 +527,7 @@ async fn run_tests_inner(
                     total,
                     duration_ms: run_out.duration_ms,
                     first_diff,
+                    verdict,
                 },
             );
         }
@@ -461,10 +535,12 @@ async fn run_tests_inner(
         results.push(TestCaseResult {
             id: case.id.clone(),
             passed,
+            verdict,
             stdout,
             stderr,
             exit_code: run_out.exit_code,
             duration_ms: run_out.duration_ms,
+            cpu_ms: run_out.cpu_ms,
             killed_by: run_out.killed_by,
             truncated: run_out.truncated,
             first_diff,
@@ -681,5 +757,161 @@ mod tests {
         assert!(!manager.is_busy());
         // 可再次注册新会话
         assert!(manager.register(RunKind::TestRun).is_ok());
+    }
+
+    // ============ classify_verdict 测试 ============
+    // 覆盖优先级：TLE > RE > OLE > WA > UKE
+    // 以及各类边界条件
+
+    #[test]
+    fn classify_verdict_passed_returns_ac() {
+        assert_eq!(
+            classify_verdict(true, Some(0), 100, 1000, None, false),
+            Verdict::Ac
+        );
+        // passed=true 时忽略其他字段
+        assert_eq!(
+            classify_verdict(true, Some(1), 2000, 1000, Some(KillReason::Timeout), true),
+            Verdict::Ac
+        );
+    }
+
+    #[test]
+    fn classify_verdict_cpu_exceeded_returns_tle() {
+        // CPU 时间超限，退出码 0，输出不匹配 → TLE（优先于 WA）
+        assert_eq!(
+            classify_verdict(false, Some(0), 1500, 1000, None, false),
+            Verdict::Tle
+        );
+    }
+
+    #[test]
+    fn classify_verdict_killed_by_timeout_returns_tle() {
+        assert_eq!(
+            classify_verdict(false, None, 0, 1000, Some(KillReason::Timeout), false),
+            Verdict::Tle
+        );
+    }
+
+    #[test]
+    fn classify_verdict_cpu_at_limit_boundary_not_tle() {
+        // cpu_ms == time_limit_ms 不算超限（> 才算）
+        assert_eq!(
+            classify_verdict(false, Some(0), 1000, 1000, None, false),
+            Verdict::Wa
+        );
+    }
+
+    #[test]
+    fn classify_verdict_killed_by_signal_returns_re() {
+        assert_eq!(
+            classify_verdict(false, None, 100, 1000, Some(KillReason::Signal), false),
+            Verdict::Re
+        );
+    }
+
+    #[test]
+    fn classify_verdict_nonzero_exit_returns_re() {
+        assert_eq!(
+            classify_verdict(false, Some(1), 100, 1000, None, false),
+            Verdict::Re
+        );
+        assert_eq!(
+            classify_verdict(false, Some(139), 100, 1000, None, false),
+            Verdict::Re
+        );
+    }
+
+    #[test]
+    fn classify_verdict_truncated_returns_ole() {
+        assert_eq!(
+            classify_verdict(false, Some(0), 100, 1000, None, true),
+            Verdict::Ole
+        );
+    }
+
+    #[test]
+    fn classify_verdict_output_mismatch_returns_wa() {
+        // 退出码 0、未超时、未被杀、未截断，但 passed=false → WA
+        assert_eq!(
+            classify_verdict(false, Some(0), 100, 1000, None, false),
+            Verdict::Wa
+        );
+    }
+
+    #[test]
+    fn classify_verdict_none_exit_returns_uke() {
+        // exit_code 为 None 且非超时/信号/截断 → UKE
+        assert_eq!(
+            classify_verdict(false, None, 100, 1000, None, false),
+            Verdict::Uke
+        );
+    }
+
+    #[test]
+    fn classify_verdict_cancelled_returns_uke() {
+        // 用户取消：killed_by=Cancelled，exit_code 通常为 None
+        // Cancelled 不属于 Timeout/Signal，且 exit_code=None → UKE
+        assert_eq!(
+            classify_verdict(false, None, 100, 1000, Some(KillReason::Cancelled), false),
+            Verdict::Uke
+        );
+    }
+
+    /// 优先级测试：TLE > RE
+    /// 超时被杀时，进程可能同时有非零退出码或 Signal，
+    /// 但 TLE 优先级更高，应返回 Tle。
+    #[test]
+    fn classify_verdict_tle_priority_over_re() {
+        // cpu_ms 超限 + killed_by=Signal → TLE（不是 RE）
+        assert_eq!(
+            classify_verdict(false, None, 2000, 1000, Some(KillReason::Signal), false),
+            Verdict::Tle
+        );
+        // cpu_ms 超限 + 非零退出码 → TLE（不是 RE）
+        assert_eq!(
+            classify_verdict(false, Some(1), 2000, 1000, None, false),
+            Verdict::Tle
+        );
+    }
+
+    /// 优先级测试：TLE > OLE
+    /// 超时同时输出被截断 → TLE 优先
+    #[test]
+    fn classify_verdict_tle_priority_over_ole() {
+        assert_eq!(
+            classify_verdict(false, Some(0), 2000, 1000, None, true),
+            Verdict::Tle
+        );
+    }
+
+    /// 优先级测试：RE > OLE
+    /// 非零退出码 + 输出截断 → RE 优先
+    #[test]
+    fn classify_verdict_re_priority_over_ole() {
+        assert_eq!(
+            classify_verdict(false, Some(1), 100, 1000, None, true),
+            Verdict::Re
+        );
+    }
+
+    /// 优先级测试：RE > WA
+    /// 非零退出码 + passed=false → RE（不是 WA）
+    #[test]
+    fn classify_verdict_re_priority_over_wa() {
+        assert_eq!(
+            classify_verdict(false, Some(1), 100, 1000, None, false),
+            Verdict::Re
+        );
+    }
+
+    /// 优先级测试：OLE > WA
+    /// 退出码 0 + 输出截断 + passed=false → OLE（不是 WA）
+    #[test]
+    fn classify_verdict_ole_priority_over_wa() {
+        assert_eq!(
+            classify_verdict(false, Some(0), 100, 1000, None, true),
+            Verdict::Ole
+        );
     }
 }

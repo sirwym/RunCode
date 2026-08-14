@@ -7,6 +7,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 import type { CustomThemeColors } from "../types";
 import { hexToRgb } from "../utils/colorExtract";
+import { formatStderrWithTranslation } from "../utils/compileErrors";
 import { useI18n } from "../hooks/useI18n";
 import {
   DropdownMenu,
@@ -115,6 +116,19 @@ const MAX_DEFERRED_BUFFER_BYTES = 512 * 1024;
 /// @returns true 表示应推迟 flush，false 表示应立即 flush
 export function shouldDeferFlush(hasSelection: boolean, bufferSize: number): boolean {
     return hasSelection && bufferSize > 0 && bufferSize < MAX_DEFERRED_BUFFER_BYTES;
+}
+
+/// 将文本中的换行符统一为 \r\n（CRLF）。
+///
+/// xterm 配置 convertEol: false 时，\n 只下移行不回列首，
+/// 会导致非 PTY 来源的文本（如 gcc/clang 的 stderr，行尾为 \n）
+/// 在终端中错位显示。此函数将 \n 和 \r\n 统一转为 \r\n，
+/// 供 compileError / compileWarning 等直接写入路径使用。
+///
+/// @param text - 原始文本（可能含 \n、\r\n 或混合）
+/// @returns 行尾全部为 \r\n 的文本
+export function normalizeEol(text: string): string {
+    return text.replace(/\r?\n/g, "\r\n");
 }
 
 /// 终端键盘快捷键动作判定。
@@ -226,6 +240,9 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
   // 保存最新的 onFocusChange，避免 effect 频繁重建
   const onFocusChangeRef = useRef(onFocusChange);
   onFocusChangeRef.current = onFocusChange;
+  // 保存最新的 runId，供 ResizeObserver 在拖拽分屏后同步 resize_pty
+  const runIdRef = useRef(runId);
+  runIdRef.current = runId;
 
   // 右键菜单状态
   const t = useI18n((s) => s.t);
@@ -371,6 +388,11 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
         if (!fitRef.current || !termRef.current) return;
         try {
           fitRef.current.fit();
+          // 拖拽分屏后同步 PTY 尺寸，防止后端按旧 cols 输出导致前端二次软换行
+          const rid = runIdRef.current;
+          if (rid) {
+            void invoke("resize_pty", { runId: rid, cols: termRef.current.cols, rows: termRef.current.rows }).catch(() => {});
+          }
         } catch {
           // 忽略 fit 错误（容器未挂载等）
         }
@@ -432,7 +454,7 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     const term = termRef.current;
     if (!term || !compileError) return;
     term.reset();
-    term.write(`\r\n\x1b[31m${compileError}\x1b[0m\r\n`);
+    term.write(`\r\n\x1b[31m${normalizeEol(formatStderrWithTranslation(compileError))}\x1b[0m\r\n`);
   }, [compileError]);
 
   // compileWarning 变化时显示编译警告（黄色 \x1b[33m）。
@@ -441,7 +463,7 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
   useEffect(() => {
     const term = termRef.current;
     if (!term || !compileWarning || !runId) return;
-    term.write(`\r\n\x1b[33m${compileWarning}\x1b[0m\r\n`);
+    term.write(`\r\n\x1b[33m${normalizeEol(formatStderrWithTranslation(compileWarning))}\x1b[0m\r\n`);
   }, [compileWarning, runId]);
 
   // runId 变化时绑定/解绑事件 + onData

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { XTERM_DARK_THEME, XTERM_LIGHT_THEME, buildCustomXtermTheme, shouldDeferFlush, resolveTerminalKeyAction } from "./Terminal";
+import { XTERM_DARK_THEME, XTERM_LIGHT_THEME, buildCustomXtermTheme, shouldDeferFlush, normalizeEol, resolveTerminalKeyAction } from "./Terminal";
 import type { CustomThemeColors } from "../types";
 
 // 验证 xterm 主题与品牌令牌一致
@@ -229,6 +229,36 @@ describe("shouldDeferFlush 选区保活决策", () => {
 
   it("缓冲为 0 时返回 false（避免空 buffer 无限 rAF 循环）", () => {
     expect(shouldDeferFlush(true, 0)).toBe(false);
+  });
+});
+
+// normalizeEol 将换行符统一为 \r\n（CRLF）
+// compileError / compileWarning 直接写入 xterm 时，convertEol: false 下
+// \n 只下移行不回列首，导致错位；需在写入前规范化为 \r\n
+describe("normalizeEol 换行规范化", () => {
+  it("将纯 \\n 转为 \\r\\n", () => {
+    expect(normalizeEol("line1\nline2\n")).toBe("line1\r\nline2\r\n");
+  });
+
+  it("\\r\\n 保持不变（不重复转换）", () => {
+    expect(normalizeEol("line1\r\nline2\r\n")).toBe("line1\r\nline2\r\n");
+  });
+
+  it("混合 \\n 与 \\r\\n 统一为 \\r\\n", () => {
+    expect(normalizeEol("a\nb\r\nc\n")).toBe("a\r\nb\r\nc\r\n");
+  });
+
+  it("无换行符的文本不变", () => {
+    expect(normalizeEol("no newlines")).toBe("no newlines");
+  });
+
+  it("空字符串不变", () => {
+    expect(normalizeEol("")).toBe("");
+  });
+
+  it("模拟 gcc 错误输出（多行 \\n）正确转换", () => {
+    const gccError = "main.cpp:3:5: error: expected ';' after expression\n1 error generated.\n";
+    expect(normalizeEol(gccError)).toBe("main.cpp:3:5: error: expected ';' after expression\r\n1 error generated.\r\n");
   });
 });
 

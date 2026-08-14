@@ -1048,6 +1048,43 @@ body::before {
   background-color: var(--error-soft);
 }
 
+/* OI 评测结果分类 badge：AC/WA/TLE/RE/OLE/UKE
+ * 语义色分配（遵循 AGENTS.md：禁止品牌蓝泛滥，使用语义色）：
+ * - AC：--success（绿，通过）
+ * - WA/RE：--error（红，答案错误/运行时错误，靠图标区分）
+ * - TLE/OLE：--warning（黄，超时/输出超限，限制类）
+ * - UKE：--text-muted（灰，未知错误）
+ */
+.testcase-badge.badge-ac {
+  color: var(--success);
+  background-color: var(--success-soft);
+}
+
+.testcase-badge.badge-wa {
+  color: var(--error);
+  background-color: var(--error-soft);
+}
+
+.testcase-badge.badge-tle {
+  color: var(--warning);
+  background-color: var(--warning-soft);
+}
+
+.testcase-badge.badge-re {
+  color: var(--error);
+  background-color: var(--error-soft);
+}
+
+.testcase-badge.badge-ole {
+  color: var(--warning);
+  background-color: var(--warning-soft);
+}
+
+.testcase-badge.badge-uke {
+  color: var(--text-muted);
+  background-color: var(--panel-bg-alt);
+}
+
 .testcase-card-header .testcase-duration {
   font-size: 11px;
   color: var(--text-muted);
