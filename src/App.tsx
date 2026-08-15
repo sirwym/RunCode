@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import {
   PanelGroup,
@@ -993,17 +994,22 @@ function App() {
 
   return (
     <div className="app-layout">
-      {isVideoBg && bgImageUrl && (
-        <video
-          ref={videoBgRef}
-          src={bgImageUrl}
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="video-bg-layer"
-        />
-      )}
+      {isVideoBg &&
+        bgImageUrl &&
+        // Portal 到 body：脱离 #root 层叠上下文（z-index 2147483001），避免视频遮挡
+        // tauri-plugin-decoration 的窗口控制按钮（z-index 2147483000，Windows 平台）
+        createPortal(
+          <video
+            ref={videoBgRef}
+            src={bgImageUrl}
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="video-bg-layer"
+          />,
+          document.body,
+        )}
       {!isMac && (
         <TitleBar
           menuHandlers={menuHandlers}

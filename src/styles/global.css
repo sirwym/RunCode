@@ -178,6 +178,8 @@ body {
 }
 
 /* 视频壁纸背景层：固定铺满视口，置于内容下方 */
+/* 通过 createPortal 渲染为 body 直接子元素，脱离 #root 层叠上下文(2147483001) */
+/* z-index: -1 低于装饰根(2147483000)，避免遮挡 Windows 窗口控制按钮；也低于遮罩层(z-index: 0) */
 .video-bg-layer {
   position: fixed;
   top: 0;
