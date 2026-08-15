@@ -2,6 +2,7 @@
 // tauri::command 宏在 Rust 1.94 下触发 never type fallback 兼容性警告
 #![allow(dependency_on_unit_never_type_fallback)]
 
+mod build_cache;
 mod commands;
 mod config;
 mod error;
@@ -25,6 +26,7 @@ use commands::{
     save_file, save_settings, start_pty_run, stop_pty_run, stop_run, update_test_case,
     update_view_menu_state, write_pty_stdin,
 };
+use build_cache::BuildCache;
 use pty::PtyManager;
 use run_manager::RunManager;
 #[cfg(target_os = "macos")]
@@ -151,6 +153,14 @@ pub fn run() {
             get_pending_open_file,
         ])
         .setup(|app| {
+            // 注册编译产物缓存（需 app_data_dir，所以放 setup 内）
+            let cache_dir = app
+                .path()
+                .app_data_dir()
+                .map(|p| p.join("build_cache"))
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error>)?;
+            app.manage(BuildCache::new(cache_dir));
+
             // 注册 single-instance 插件：必须第一个，处理热启动时新实例 args 转发
             #[cfg(desktop)]
             {

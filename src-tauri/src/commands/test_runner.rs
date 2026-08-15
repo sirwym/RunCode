@@ -4,7 +4,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio_util::sync::CancellationToken;
 
-use crate::commands::compile_run::{compile_only, load_config, CompileScenario, RunStage};
+use crate::build_cache::BuildCache;
+use crate::commands::compile_run::{compile_with_cache, load_config, CompileScenario, CompileResult, RunStage};
 use crate::error::AppError;
 use crate::run_manager::{RunKind, RunManager};
 use crate::runner::{run_with_limits, KillReason, ResourceLimits};
@@ -250,6 +251,7 @@ pub async fn run_tests(
     run_id: String,
     app: AppHandle,
     manager: State<'_, RunManager>,
+    cache: State<'_, BuildCache>,
 ) -> Result<TestRunResult, AppError> {
     let strict = strict.unwrap_or(false);
 
@@ -290,6 +292,7 @@ pub async fn run_tests(
         &app,
         &config,
         limits,
+        &cache,
     )
     .await;
     // guard 自然 drop 时调用 complete，释放 RunManager 会话。
@@ -319,25 +322,27 @@ async fn run_tests_inner(
     app: &AppHandle,
     config: &crate::config::CompilerConfig,
     limits: ResourceLimits,
+    cache: &BuildCache,
 ) -> Result<TestRunResult, AppError> {
     // 临时工作目录
     let work_dir = tempfile::TempDir::new()?;
     let work_path = work_dir.path().to_path_buf();
 
-    // 编译（复用 compile_only，测试场景用 test.opt_level）
+    // 编译（复用 compile_with_cache，测试场景用 test.opt_level）
     // clone token 保留原 token 给每例运行
-    let exe_path = match compile_only(
+    let exe_path = match compile_with_cache(
         code,
         config,
         CompileScenario::Test,
         &work_path,
         limits,
         Some(cancel_token.clone()),
+        Some(cache),
     )
     .await?
     {
-        crate::commands::compile_run::CompileResult::Success { exe_path, .. } => exe_path,
-        crate::commands::compile_run::CompileResult::Failed {
+        CompileResult::Success { exe_path, .. } => exe_path,
+        CompileResult::Failed {
             stdout,
             stderr,
             exit_code: _,
