@@ -572,18 +572,29 @@ mod tests {
         // Windows（TDM-GCC 有 bits/stdc++.h）生成成功时跳过断言，成功路径由 finish 流程覆盖
     }
 
-    // ============ -include-pch 参数通路集成测试（跨平台真实 PCH） ============
+    // ============ -include 预编译头通路集成测试（跨平台真实 PCH） ============
 
     #[tokio::test]
     async fn test_compile_with_pch_integration() {
         // 用 iostream 生成真实 PCH（macOS clang++ / Windows g++ 均支持 -x c++-header），
-        // 验证 compile_only 的 -include-pch 参数通路真实可用
+        // 验证 compile_only 的 -include 预编译头通路真实可用
         use crate::commands::compile_run::{compile_only, CompileResult, CompileScenario as Cs};
         use which::which;
 
+        // 优先 PATH 中的 clang++/g++（macOS CI），否则回退打包 TDM-GCC（Windows），
+        // 与生产探测一致，避免"只测 clang 分支"掩盖 GCC 通路问题
         let compiler = which("clang++")
             .or_else(|_| which("g++"))
-            .expect("测试环境需有 clang++ 或 g++");
+            .ok()
+            .or_else(|| {
+                let bundled = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("resources")
+                    .join("tdm-gcc")
+                    .join("bin")
+                    .join("g++.exe");
+                bundled.exists().then_some(bundled)
+            })
+            .expect("测试环境需有 clang++、g++ 或打包 TDM-GCC");
 
         let tmp = TempDir::new().unwrap();
         let pch_h = tmp.path().join("pch.h");
@@ -623,7 +634,7 @@ mod tests {
             .expect("带 PCH 编译应成功");
         assert!(
             matches!(result, CompileResult::Success { .. }),
-            "-include-pch 通路应可用"
+            "-include 通路应可用"
         );
     }
 }

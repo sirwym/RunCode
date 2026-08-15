@@ -70,7 +70,7 @@ pub enum CompileResult {
 ///
 /// 在 work_dir 中写 main.cpp 并编译为 main 可执行文件。
 /// `scenario` 决定使用哪套编译参数（Run=快速运行 O0，Test=多样例测试 O2）。
-/// `pch_gch` 为 Some 时编译命令追加 `-include-pch <path>` 复用预编译头（仅加速过程，不改变产物）。
+/// `pch_gch` 为 Some 时编译命令追加 `-include <pch.h>` 复用预编译头（仅加速过程，不改变产物）。
 /// 调用者负责持有 work_dir（TempDir）直到不再需要 exe。
 ///
 /// `cancel_token` 由调用方 clone 传入，支持编译阶段取消。
@@ -97,8 +97,11 @@ pub async fn compile_only(
     let mut compile_cmd: Vec<String> = vec![config.compiler_path.to_string_lossy().into_owned()];
     compile_cmd.extend(config.args_for(scenario).iter().cloned());
     if let Some(gch) = pch_gch {
-        compile_cmd.push("-include-pch".into());
-        compile_cmd.push(gch.to_string_lossy().into_owned());
+        // GCC 无 -include-pch（Clang 专用；GCC 按 Joined 规则解析成 -include + "-pch"，报
+        // fatal error: -pch: No such file or directory）。改用 -include <pch.h>，
+        // GCC 自动复用同目录 pch.h.gch；clang 下退化为文本包含（仅无加速，不影响正确性）。
+        compile_cmd.push("-include".into());
+        compile_cmd.push(gch.with_file_name("pch.h").to_string_lossy().into_owned());
     }
     compile_cmd.push("-o".into());
     compile_cmd.push(exe_path.to_string_lossy().into_owned());
@@ -209,7 +212,7 @@ pub async fn compile_with_cache(
             }
         }
 
-        // 未命中或拷贝失败回退：正常编译（可能带 -include-pch）
+        // 未命中或拷贝失败回退：正常编译（可能带 -include 预编译头）
         let result = compile_only(
             code,
             config,
@@ -585,6 +588,73 @@ int main() { return 0; }
             }
             CompileResult::Success { .. } => {
                 panic!("预期编译失败，但得到 Success");
+            }
+        }
+    }
+
+    /// 回归测试：PCH 命中后编译命令曾用 -include-pch（Clang 专用选项），
+    /// GCC 将其按 Joined 规则解析为 -include + "-pch"，报
+    /// "cc1plus.exe: fatal error: -pch: No such file or directory"。
+    /// 修复后改用 -include <pch.h>，GCC 自动复用同目录 .gch。
+    /// 仅在打包 TDM-GCC 存在时执行（与 Windows 生产编译器一致），其余环境跳过。
+    #[tokio::test]
+    async fn compile_only_with_pch_succeeds_on_bundled_gcc() {
+        let tdm_gcc = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources")
+            .join("tdm-gcc")
+            .join("bin")
+            .join("g++.exe");
+        if !tdm_gcc.exists() {
+            return;
+        }
+
+        let (config, mut limits) = test_config();
+        // 与 generate_pch 一致：放宽 fsize（.gch 是编译器合法产物，超默认 10MB）
+        limits.fsize_mb = 512;
+
+        // 生成 iostream PCH（比 bits/stdc++.h 快得多，-include 通路与生产一致）
+        let tmp = TempDir::new().unwrap();
+        let pch_h = tmp.path().join("pch.h");
+        std::fs::write(&pch_h, "#include <iostream>\n").unwrap();
+        let gch = tmp.path().join("pch.h.gch");
+        let mut gen_cmd: Vec<String> = vec![config.compiler_path.to_string_lossy().into_owned()];
+        gen_cmd.extend(config.args_for(CompileScenario::Run).iter().cloned());
+        gen_cmd.extend([
+            "-x".into(),
+            "c++-header".into(),
+            pch_h.to_string_lossy().into_owned(),
+            "-o".into(),
+            gch.to_string_lossy().into_owned(),
+        ]);
+        let gen = run_with_limits(
+            gen_cmd,
+            tmp.path(),
+            None,
+            std::time::Duration::from_secs(60),
+            limits,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(gen.exit_code, Some(0), "PCH 生成应成功");
+
+        let work = TempDir::new().unwrap();
+        let code = "#include <iostream>\nint main() { return 0; }";
+        let result = compile_only(
+            code,
+            &config,
+            CompileScenario::Run,
+            work.path(),
+            limits,
+            None,
+            Some(&gch),
+        )
+        .await
+        .unwrap();
+        match result {
+            CompileResult::Success { .. } => {}
+            CompileResult::Failed { stderr, .. } => {
+                panic!("TDM-GCC 下复用 PCH 编译应成功，实际失败: {stderr}");
             }
         }
     }

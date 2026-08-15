@@ -54,11 +54,10 @@ interface TabResults {
   testResult: TestRunResult | null;
   ptyExitInfo: PtyExitInfo | null;
   compileError: string | null;
-  compileWarning: string | null;
 }
 
 function emptyTabResults(): TabResults {
-  return { runResult: null, testResult: null, ptyExitInfo: null, compileError: null, compileWarning: null };
+  return { runResult: null, testResult: null, ptyExitInfo: null, compileError: null };
 }
 
 interface RunManagerState {
@@ -84,10 +83,6 @@ interface RunManagerState {
   // 编译失败时的 stderr（PTY 交互模式下，编译失败不创建 PTY 会话，
   // 直接把 stderr 存这里供 Terminal 显示 + Editor 解析错误行）
   compileError: string | null;
-
-  // 编译成功但有 warning 时的 stderr（PTY 交互模式下，编译成功仍启动 PTY，
-  // 在程序交互输出前以黄色显示 warning，不阻止程序启动，不触发错误状态）
-  compileWarning: string | null;
 
   // per-tab 结果快照（按 tab id 索引）
   activeTabId: string | null;
@@ -123,7 +118,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   ptyExitInfo: null,
   ptyStartTime: null,
   compileError: null,
-  compileWarning: null,
   activeTabId: null,
   resultsByTab: {},
 
@@ -135,7 +129,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       testResult: snapshot.testResult,
       ptyExitInfo: snapshot.ptyExitInfo,
       compileError: snapshot.compileError,
-      compileWarning: snapshot.compileWarning,
       // testProgress 是瞬时的，切换 tab 时清空
       testProgress: null,
     });
@@ -160,7 +153,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       error: null,
       kind: "compile_run",
       testResult: null,
-      compileWarning: null,
     });
     try {
       const result = await invoke<RunResult>("compile_and_run", { code, stdin, runId });
@@ -177,7 +169,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                 compileError: isCompileFailed ? result.stderr : s.resultsByTab[initiatorTabId]?.compileError ?? null,
-                compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
           : s.resultsByTab;
@@ -204,7 +195,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                 compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
-                compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
           : s.resultsByTab;
@@ -289,7 +279,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 testResult: result,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                 compileError: isCompileFailed ? result.compile_stderr : s.resultsByTab[initiatorTabId]?.compileError ?? null,
-                compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
           : s.resultsByTab;
@@ -316,7 +305,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                 testResult: null,
                 ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                 compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
-                compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
               },
             }
           : s.resultsByTab;
@@ -354,7 +342,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       ptyExitInfo: null,
       ptyStartTime: Date.now(),
       compileError: null,
-      compileWarning: null,
     });
     try {
       const result = await invoke<StartPtyResult>("start_pty_run", { code, runId });
@@ -367,12 +354,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
           await invoke<boolean>("stop_pty_run", { runId }).catch(() => {});
           return;
         }
-        // 编译成功但有 warning 时，存储 compile_stderr 供 Terminal 在 PTY 输出前显示。
-        // 注意：compile_stderr 即使为空字符串也存储（Terminal 会判断是否为空决定是否显示），
-        // 但为了精确控制显示，这里只在非空时存储。
-        const warningText = result.compile_stderr.trim() !== "" ? result.compile_stderr : null;
         set((s) => {
-          const isStillActive = s.activeTabId === initiatorTabId;
           const resultsByTab = initiatorTabId
             ? {
                 ...s.resultsByTab,
@@ -381,14 +363,12 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                   testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
                   ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                   compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
-                  compileWarning: warningText,
                 },
               }
             : s.resultsByTab;
           return {
             activeRunId: result.run_id,
             ptyRunId: result.run_id,
-            compileWarning: isStillActive ? warningText : s.compileWarning,
             resultsByTab,
           };
         });
@@ -406,7 +386,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
                   testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
                   ptyExitInfo: s.resultsByTab[initiatorTabId]?.ptyExitInfo ?? null,
                   compileError: result.stderr,
-                  compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
                 },
               }
             : s.resultsByTab;
@@ -454,7 +433,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
               testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
               ptyExitInfo: exitInfo,
               compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
-              compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
             },
           }
         : s.resultsByTab;
@@ -484,7 +462,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
               testResult: s.resultsByTab[initiatorTabId]?.testResult ?? null,
               ptyExitInfo: exitInfo,
               compileError: s.resultsByTab[initiatorTabId]?.compileError ?? null,
-              compileWarning: s.resultsByTab[initiatorTabId]?.compileWarning ?? null,
             },
           }
         : s.resultsByTab;
@@ -536,7 +513,6 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       ptyStartTime: null,
       testProgress: null,
       compileError: null,
-      compileWarning: null,
     });
   },
 }));

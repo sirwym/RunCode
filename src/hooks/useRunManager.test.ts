@@ -64,7 +64,6 @@ describe("useRunManager per-tab 隔离", () => {
       ptyExitInfo: null,
       ptyStartTime: null,
       compileError: null,
-      compileWarning: null,
       activeTabId: null,
       resultsByTab: {},
     });
@@ -285,13 +284,12 @@ describe("useRunManager per-tab 隔离", () => {
   });
 });
 
-// ============ PTY 交互运行编译 warning 保留测试 ============
-// 验证 StartPtyResult::Success 携带 compile_stderr（含 warning）时：
-// - 状态保持 running（不变成 error）
-// - compileWarning 写入 store + 发起 tab 快照
+// ============ PTY 交互运行编译成功状态测试 ============
+// 验证 StartPtyResult::Success（含/不含 warning 的 compile_stderr）时：
+// - 状态保持 running（不变成 error，警告不展示、被忽略）
 // - 不影响 compileError（语义分离）
 // - PTY 会话正常建立（ptyRunId 非空）
-describe("useRunManager PTY 编译 warning 保留", () => {
+describe("useRunManager PTY 编译成功状态", () => {
   beforeEach(() => {
     useRunManager.setState({
       activeRunId: null,
@@ -305,7 +303,6 @@ describe("useRunManager PTY 编译 warning 保留", () => {
       ptyExitInfo: null,
       ptyStartTime: null,
       compileError: null,
-      compileWarning: null,
       activeTabId: null,
       resultsByTab: {},
     });
@@ -314,7 +311,7 @@ describe("useRunManager PTY 编译 warning 保留", () => {
     listenMock.mockResolvedValue(() => {});
   });
 
-  it("StartPtyResult success + 含 warning → 状态 running，compileWarning 存储，ptyRunId 非空", async () => {
+  it("StartPtyResult success + 含 warning → 状态 running，PTY 建立，compileError 保持 null", async () => {
     useRunManager.getState().setActiveTab("tab-a");
     const warningStderr = "main.cpp:7:1: warning: non-void function does not return a value in all control paths [-Wreturn-type]";
     invokeMock.mockResolvedValueOnce({
@@ -333,48 +330,11 @@ describe("useRunManager PTY 编译 warning 保留", () => {
     // PTY 会话正常建立
     expect(s.activeRunId).toBe("pty-1");
     expect(s.ptyRunId).toBe("pty-1");
-    // compileWarning 存储
-    expect(s.compileWarning).toBe(warningStderr);
-    // compileError 保持 null（语义分离，warning 不应触发错误状态）
+    // compileError 保持 null（warning 不应触发错误状态）
     expect(s.compileError).toBeNull();
-    // 快照隔离
-    expect(s.resultsByTab["tab-a"]?.compileWarning).toBe(warningStderr);
-    expect(s.resultsByTab["tab-a"]?.compileError).toBeNull();
   });
 
-  it("StartPtyResult success + 空 stderr → compileWarning 为 null（无 warning 不显示）", async () => {
-    useRunManager.getState().setActiveTab("tab-a");
-    invokeMock.mockResolvedValueOnce({
-      status: "success",
-      run_id: "pty-2",
-      compile_stdout: "",
-      compile_stderr: "",
-    });
-
-    await useRunManager.getState().startInteractive("code");
-
-    const s = useRunManager.getState();
-    expect(s.status).toBe("running");
-    expect(s.ptyRunId).toBe("pty-2");
-    expect(s.compileWarning).toBeNull();
-  });
-
-  it("StartPtyResult success + 仅空白 stderr → compileWarning 为 null", async () => {
-    useRunManager.getState().setActiveTab("tab-a");
-    invokeMock.mockResolvedValueOnce({
-      status: "success",
-      run_id: "pty-3",
-      compile_stdout: "",
-      compile_stderr: "   \n  \n",
-    });
-
-    await useRunManager.getState().startInteractive("code");
-
-    const s = useRunManager.getState();
-    expect(s.compileWarning).toBeNull();
-  });
-
-  it("StartPtyResult compile_failed → compileError 存储，compileWarning 保持 null", async () => {
+  it("StartPtyResult compile_failed → compileError 存储", async () => {
     useRunManager.getState().setActiveTab("tab-a");
     invokeMock.mockResolvedValueOnce({
       status: "compile_failed",
@@ -390,51 +350,6 @@ describe("useRunManager PTY 编译 warning 保留", () => {
     expect(s.activeRunId).toBeNull();
     expect(s.ptyRunId).toBeNull();
     expect(s.compileError).toBe("error: foo");
-    // warning 不应被设置
-    expect(s.compileWarning).toBeNull();
-  });
-
-  it("compileWarning 写入发起 tab，切换 tab 隔离", async () => {
-    useRunManager.getState().setActiveTab("tab-a");
-    const warning = "main.cpp:3:5: warning: unused variable 'x' [-Wunused-variable]";
-    invokeMock.mockResolvedValueOnce({
-      status: "success",
-      run_id: "pty-4",
-      compile_stdout: "",
-      compile_stderr: warning,
-    });
-
-    await useRunManager.getState().startInteractive("code");
-
-    // 切到 tab-b → 无 compileWarning
-    useRunManager.getState().setActiveTab("tab-b");
-    expect(useRunManager.getState().compileWarning).toBeNull();
-
-    // 切回 tab-a → 恢复 warning
-    useRunManager.getState().setActiveTab("tab-a");
-    expect(useRunManager.getState().compileWarning).toBe(warning);
-  });
-
-  it("onPtyExit 后 compileWarning 保留在快照中（恢复查看时仍可见）", async () => {
-    useRunManager.getState().setActiveTab("tab-a");
-    const warning = "main.cpp:7:1: warning: non-void function does not return a value";
-    invokeMock.mockResolvedValueOnce({
-      status: "success",
-      run_id: "pty-5",
-      compile_stdout: "",
-      compile_stderr: warning,
-    });
-    await useRunManager.getState().startInteractive("code");
-
-    // 模拟 PTY 退出
-    useRunManager.getState().onPtyExit({ exitCode: 0, killedBy: null }, 1024);
-
-    // 退出后 compileWarning 在当前 state 中保留（来自 tab-a 快照）
-    expect(useRunManager.getState().compileWarning).toBe(warning);
-    // 切走再切回，warning 仍在快照中
-    useRunManager.getState().setActiveTab("tab-b");
-    useRunManager.getState().setActiveTab("tab-a");
-    expect(useRunManager.getState().compileWarning).toBe(warning);
   });
 });
 
@@ -457,7 +372,6 @@ describe("useRunManager 前端生成 runId", () => {
       ptyExitInfo: null,
       ptyStartTime: null,
       compileError: null,
-      compileWarning: null,
       activeTabId: null,
       resultsByTab: {},
     });
@@ -546,7 +460,7 @@ describe("useRunManager startInteractive 预生成 runId", () => {
       activeRunId: null, kind: null, status: "idle",
       runResult: null, testResult: null, error: null, testProgress: null,
       ptyRunId: null, ptyExitInfo: null, ptyStartTime: null,
-      compileError: null, compileWarning: null,
+      compileError: null,
       activeTabId: null, resultsByTab: {},
     });
     invokeMock.mockReset();
@@ -587,7 +501,7 @@ describe("useRunManager stop 后旧请求覆盖守卫", () => {
       activeRunId: null, kind: null, status: "idle",
       runResult: null, testResult: null, error: null, testProgress: null,
       ptyRunId: null, ptyExitInfo: null, ptyStartTime: null,
-      compileError: null, compileWarning: null,
+      compileError: null,
       activeTabId: null, resultsByTab: {},
     });
     invokeMock.mockReset();
@@ -714,7 +628,6 @@ describe("useRunManager compileRun/runTests 编译失败 compileError 接入", (
       ptyExitInfo: null,
       ptyStartTime: null,
       compileError: null,
-      compileWarning: null,
       activeTabId: null,
       resultsByTab: {},
     });

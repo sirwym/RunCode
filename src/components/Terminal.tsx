@@ -123,7 +123,7 @@ export function shouldDeferFlush(hasSelection: boolean, bufferSize: number): boo
 /// xterm 配置 convertEol: false 时，\n 只下移行不回列首，
 /// 会导致非 PTY 来源的文本（如 gcc/clang 的 stderr，行尾为 \n）
 /// 在终端中错位显示。此函数将 \n 和 \r\n 统一转为 \r\n，
-/// 供 compileError / compileWarning 等直接写入路径使用。
+/// 供 compileError 等直接写入路径使用。
 ///
 /// @param text - 原始文本（可能含 \n、\r\n 或混合）
 /// @returns 行尾全部为 \r\n 的文本
@@ -189,9 +189,6 @@ interface TerminalProps {
   // 编译失败时的 stderr（PTY 交互模式下编译失败不创建 PTY 会话，
   // 由父组件传入 stderr 直接显示）
   compileError?: string | null;
-  // 编译成功但有 warning 时的 stderr（PTY 交互模式下编译成功仍启动 PTY，
-  // 在 PTY 交互输出前以黄色显示，不阻止程序启动，不触发错误状态）
-  compileWarning?: string | null;
   onFocusChange?: (focused: boolean) => void;
   visible?: boolean;
 }
@@ -215,7 +212,7 @@ function resolveXtermTheme(
 // - 用户输入通过 onData → write_pty_stdin
 // - 容器大小变化通过 ResizeObserver → resize_pty
 // - fontSize 仅在初始化时读取，运行中改设置需重启应用生效
-function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, baseMode, compileError, compileWarning, onFocusChange, visible = true }: TerminalProps) {
+function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, baseMode, compileError, onFocusChange, visible = true }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -457,15 +454,6 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     term.write(`\r\n\x1b[31m${normalizeEol(formatStderrWithTranslation(compileError))}\x1b[0m\r\n`);
   }, [compileError]);
 
-  // compileWarning 变化时显示编译警告（黄色 \x1b[33m）。
-  // 独立 effect：ptyRunId 在 invoke 前就设置（让监听器提前注册），
-  // compileWarning 在 invoke 返回后才设置，需独立 effect 才能在 PTY 输出前写入。
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term || !compileWarning || !runId) return;
-    term.write(`\r\n\x1b[33m${normalizeEol(formatStderrWithTranslation(compileWarning))}\x1b[0m\r\n`);
-  }, [compileWarning, runId]);
-
   // runId 变化时绑定/解绑事件 + onData
   useEffect(() => {
     const term = termRef.current;
@@ -474,7 +462,6 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     // 清空终端（新会话）
     term.reset();
 
-    // compileWarning 改为独立 effect 处理（ptyRunId 提前设置后，warning 在 invoke 返回后才到达）
     // 监听 PTY 输出
     let unlistenOutput: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;

@@ -168,7 +168,6 @@ function App() {
   const onPtyExit = useRunManager((s) => s.onPtyExit);
   const ptyRunId = useRunManager((s) => s.ptyRunId);
   const compileError = useRunManager((s) => s.compileError);
-  const compileWarning = useRunManager((s) => s.compileWarning);
   const strict = useTestOptions((s) => s.strict);
 
   // 读取设置（用于 StatusBar / Editor / Terminal 等）
@@ -1127,7 +1126,6 @@ function App() {
                     : undefined
                 }
                 compileError={compileError}
-                compileWarning={compileWarning}
                 onFocusChange={(focused) => { terminalFocusedRef.current = focused; }}
                 visible={tab === "terminal"}
               />

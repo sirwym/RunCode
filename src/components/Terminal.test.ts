@@ -233,7 +233,7 @@ describe("shouldDeferFlush 选区保活决策", () => {
 });
 
 // normalizeEol 将换行符统一为 \r\n（CRLF）
-// compileError / compileWarning 直接写入 xterm 时，convertEol: false 下
+// compileError 直接写入 xterm 时，convertEol: false 下
 // \n 只下移行不回列首，导致错位；需在写入前规范化为 \r\n
 describe("normalizeEol 换行规范化", () => {
   it("将纯 \\n 转为 \\r\\n", () => {

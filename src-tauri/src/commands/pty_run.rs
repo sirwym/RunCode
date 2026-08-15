@@ -108,7 +108,7 @@ fn find_valid_utf8_boundary(bytes: &[u8]) -> usize {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum StartPtyResult {
     /// 编译成功，PTY 已创建，后续输出/退出通过 pty_output / pty_exit 事件推送。
-    /// compile_stderr 可能含编译警告，前端在 PTY 交互输出前显示（不阻止程序启动）。
+    /// compile_stderr 可能含编译警告，前端当前不展示（不阻止程序启动）。
     Success {
         run_id: String,
         compile_stdout: String,

@@ -13,8 +13,8 @@ export interface AppErrorPayload {
 export type RunStage = "compile_failed" | "ran";
 
 // 与 Rust 端 pty_run.rs StartPtyResult 对应（tag = "status"）
-// success 分支携带 compile_stdout/compile_stderr：编译成功但有 warning 时，
-// 前端在 PTY 交互输出前显示 compile_stderr（黄色），不阻止程序启动。
+// success 分支携带 compile_stdout/compile_stderr：编译成功即启动 PTY，
+// 编译警告不展示（历史方案曾写入 xterm / 顶部警告条，均已移除）。
 export type StartPtyResult =
   | { status: "success"; run_id: string; compile_stdout: string; compile_stderr: string }
   | { status: "compile_failed"; run_id: string; stderr: string };
