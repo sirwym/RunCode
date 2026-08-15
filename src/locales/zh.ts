@@ -262,6 +262,16 @@ export const zh = {
     themeCustomApplied: "已导入图片：{file}",
     themeCustomSaveHint: "点击底部「保存」按钮生效",
     themeCustomDeleted: "已删除自定义主题，切换到预设主题",
+    // 编译缓存管理
+    buildCache: "编译缓存",
+    buildCacheSize: "缓存占用",
+    buildCacheSummary: "{exe} 个编译产物 · {pch} 套预编译头 · {size}",
+    clearBuildCache: "清空缓存",
+    buildCacheCleared: "已清空编译缓存，下次编译将重新进行",
+    buildCacheClearFailed: "清空编译缓存失败：{detail}",
+    clearBuildCacheConfirmTitle: "清空编译缓存",
+    clearBuildCacheConfirmDesc:
+      "将删除所有编译产物与预编译头缓存，之后首次编译会变慢。确定清空吗？",
   },
   langConfig: {
     title: "运行配置",

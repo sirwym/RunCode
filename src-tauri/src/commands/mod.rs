@@ -23,7 +23,7 @@ pub async fn stop_run(run_id: String, manager: State<'_, RunManager>) -> Result<
     Ok(manager.cancel(&run_id))
 }
 
-pub use compile_run::compile_and_run;
+pub use compile_run::{clear_build_cache, compile_and_run, get_build_cache_stats};
 pub use documents::{open_file, save_file};
 pub use format_cmd::format_code;
 pub use import_cmd::import_test_cases;

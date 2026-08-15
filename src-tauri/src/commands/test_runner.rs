@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::build_cache::BuildCache;
 use crate::commands::compile_run::{compile_with_cache, load_config, CompileScenario, CompileResult, RunStage};
+use crate::pch_cache::PchCache;
 use crate::error::AppError;
 use crate::run_manager::{RunKind, RunManager};
 use crate::runner::{run_with_limits, KillReason, ResourceLimits};
@@ -252,6 +253,7 @@ pub async fn run_tests(
     app: AppHandle,
     manager: State<'_, RunManager>,
     cache: State<'_, BuildCache>,
+    pch: State<'_, PchCache>,
 ) -> Result<TestRunResult, AppError> {
     let strict = strict.unwrap_or(false);
 
@@ -293,6 +295,7 @@ pub async fn run_tests(
         &config,
         limits,
         &cache,
+        &pch,
     )
     .await;
     // guard 自然 drop 时调用 complete，释放 RunManager 会话。
@@ -323,6 +326,7 @@ async fn run_tests_inner(
     config: &crate::config::CompilerConfig,
     limits: ResourceLimits,
     cache: &BuildCache,
+    pch: &PchCache,
 ) -> Result<TestRunResult, AppError> {
     // 临时工作目录
     let work_dir = tempfile::TempDir::new()?;
@@ -338,6 +342,7 @@ async fn run_tests_inner(
         limits,
         Some(cancel_token.clone()),
         Some(cache),
+        Some(pch),
     )
     .await?
     {

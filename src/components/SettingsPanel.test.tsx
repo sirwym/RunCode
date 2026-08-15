@@ -1435,3 +1435,129 @@ describe("SettingsPanel 自定义色板与重置", () => {
     expect(saved.general.custom_theme?.colors.primary_soft).toContain("rgba(255, 0, 0");
   });
 });
+
+describe("SettingsPanel 编译缓存管理（编程语言 tab）", () => {
+  beforeAll(() => {
+    if (!window.matchMedia) {
+      window.matchMedia = ((q: string) => ({
+        matches: false,
+        media: q,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia;
+    }
+  });
+
+  const fakeStats = {
+    exe_count: 2,
+    exe_bytes: 1024,
+    pch_count: 1,
+    pch_bytes: 2048,
+    total_bytes: 3072,
+  };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "get_build_cache_stats") return Promise.resolve(fakeStats);
+      return Promise.resolve(undefined);
+    });
+    resetStores(makeSettings());
+  });
+
+  // 取最后一个 role=dialog（确认弹窗在设置面板 Dialog 之后 portal 渲染）
+  function getConfirmDialog(): HTMLElement {
+    const dialogs = document.querySelectorAll('[role="dialog"]');
+    expect(dialogs.length).toBeGreaterThanOrEqual(2);
+    return dialogs[dialogs.length - 1] as HTMLElement;
+  }
+
+  it("面板打开时调用 get_build_cache_stats", async () => {
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    await vi.waitFor(() => {
+      expect(invokeMock.mock.calls.find((c) => c[0] === "get_build_cache_stats")).toBeDefined();
+    });
+  });
+
+  it("编译缓存分区显示统计文案（exe 数 / pch 套数 / 格式化 size）", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    await user.click(screen.getByRole("tab", { name: zh.settings.languageSettings }));
+
+    expect(screen.getByText(zh.settings.buildCache)).toBeInTheDocument();
+    // 统计 span 渲染 "2 个编译产物 · 1 套预编译头 · 3.0 KB"（formatBytes(3072) = 3.0 KB）
+    const statsSpan = await screen.findByText(
+      (_, el) => el?.id === "set-build-cache",
+    );
+    expect(statsSpan.textContent).toContain("2");
+    expect(statsSpan.textContent).toContain("1");
+    expect(statsSpan.textContent).toContain("3.0 KB");
+  });
+
+  it("清空流程：点击清空 → 确认 Dialog → 点确认 → 调用 clear_build_cache 并显示成功消息", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    await user.click(screen.getByRole("tab", { name: zh.settings.languageSettings }));
+
+    // 点击分区中的清空按钮（此时 Dialog 未打开，唯一实例）
+    await user.click(screen.getByRole("button", { name: zh.settings.clearBuildCache }));
+
+    // 确认 Dialog 出现（标题 + 描述）
+    const dialog = getConfirmDialog();
+    const dialogScope = within(dialog);
+    expect(dialogScope.getByText(zh.settings.clearBuildCacheConfirmTitle)).toBeInTheDocument();
+    expect(dialogScope.getByText(zh.settings.clearBuildCacheConfirmDesc)).toBeInTheDocument();
+
+    // 点确认（Dialog 内的清空按钮）
+    await user.click(dialogScope.getByRole("button", { name: zh.settings.clearBuildCache }));
+
+    await vi.waitFor(() => {
+      expect(invokeMock.mock.calls.find((c) => c[0] === "clear_build_cache")).toBeDefined();
+    });
+    // 成功消息显示
+    expect(await screen.findByText(zh.settings.buildCacheCleared)).toBeInTheDocument();
+    // Dialog 关闭（描述不再存在于确认弹窗中）
+    await vi.waitFor(() => {
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      expect(dialogs.length).toBe(1);
+    });
+  });
+
+  it("取消流程：点清空 → 点取消 → clear_build_cache 未被调用", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    await user.click(screen.getByRole("tab", { name: zh.settings.languageSettings }));
+
+    await user.click(screen.getByRole("button", { name: zh.settings.clearBuildCache }));
+
+    const dialogScope = within(getConfirmDialog());
+    // 点取消（Dialog 内的取消按钮，与面板底部的取消隔离）
+    await user.click(dialogScope.getByRole("button", { name: zh.settings.cancel }));
+
+    // Dialog 关闭且未调用 clear_build_cache
+    await vi.waitFor(() => {
+      expect(document.querySelectorAll('[role="dialog"]').length).toBe(1);
+    });
+    expect(invokeMock.mock.calls.find((c) => c[0] === "clear_build_cache")).toBeUndefined();
+  });
+
+  it("清空成功后重新拉取统计并刷新显示", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    await user.click(screen.getByRole("tab", { name: zh.settings.languageSettings }));
+
+    await user.click(screen.getByRole("button", { name: zh.settings.clearBuildCache }));
+    const dialogScope = within(getConfirmDialog());
+    await user.click(dialogScope.getByRole("button", { name: zh.settings.clearBuildCache }));
+
+    // 清空后 get_build_cache_stats 被再次调用（共 2 次：打开面板 + 清空后）
+    await vi.waitFor(() => {
+      const statCalls = invokeMock.mock.calls.filter((c) => c[0] === "get_build_cache_stats");
+      expect(statCalls.length).toBe(2);
+    });
+  });
+});

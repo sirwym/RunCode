@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::build_cache::BuildCache;
 use crate::commands::compile_run::{compile_with_cache, load_config, CompileScenario, CompileResult};
+use crate::pch_cache::PchCache;
 use crate::error::AppError;
 use crate::pty::{PtyManager, PtySession};
 use crate::run_manager::{RunKind, RunManager};
@@ -159,6 +160,7 @@ pub async fn start_pty_run(
     run_manager: State<'_, RunManager>,
     pty_manager: State<'_, PtyManager>,
     cache: State<'_, BuildCache>,
+    pch: State<'_, PchCache>,
 ) -> Result<StartPtyResult, AppError> {
     // 1. 注册 RunManager（使用前端传入的 run_id，与 compile_run/test_runner 对齐）
     let cancel_token = run_manager
@@ -187,7 +189,7 @@ pub async fn start_pty_run(
         active: true,
     };
 
-    let result = start_pty_run_inner(code, run_id.clone(), cancel_token, &app, &pty_manager, &cache).await;
+    let result = start_pty_run_inner(code, run_id.clone(), cancel_token, &app, &pty_manager, &cache, &pch).await;
     // Success：等待线程负责 complete，禁用 guard
     // CompileFailed：inner 已 complete，禁用 guard
     // Err：guard.Drop 会 complete
@@ -237,6 +239,7 @@ async fn start_pty_run_inner(
     app: &AppHandle,
     pty_manager: &State<'_, PtyManager>,
     cache: &BuildCache,
+    pch: &PchCache,
 ) -> Result<StartPtyResult, AppError> {
     // 2. 编译（clone token 保留原 token 给读取线程的 50MB 上限触发）
     let (_settings, config, limits) = load_config(app)?;
@@ -250,6 +253,7 @@ async fn start_pty_run_inner(
         limits,
         Some(cancel_token.clone()),
         Some(cache),
+        Some(pch),
     )
     .await?
     {

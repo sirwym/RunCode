@@ -262,6 +262,16 @@ export const en = {
     themeCustomApplied: "Imported image: {file}",
     themeCustomSaveHint: "Click \"Save\" at the bottom to apply",
     themeCustomDeleted: "Custom theme deleted, switched to preset",
+    // Build cache management
+    buildCache: "Build Cache",
+    buildCacheSize: "Cache Usage",
+    buildCacheSummary: "{exe} artifacts · {pch} PCH sets · {size}",
+    clearBuildCache: "Clear Cache",
+    buildCacheCleared: "Build cache cleared; next compile will rebuild",
+    buildCacheClearFailed: "Failed to clear build cache: {detail}",
+    clearBuildCacheConfirmTitle: "Clear Build Cache",
+    clearBuildCacheConfirmDesc:
+      "This deletes all compiled artifacts and precompiled headers. The first compile afterwards will be slower. Continue?",
   },
   langConfig: {
     title: "Run Config",

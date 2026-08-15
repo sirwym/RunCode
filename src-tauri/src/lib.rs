@@ -9,6 +9,7 @@ mod error;
 mod formatter;
 mod importer;
 mod parser;
+mod pch_cache;
 mod pty;
 mod recent_files;
 mod run_manager;
@@ -17,16 +18,17 @@ mod settings;
 mod test_suite;
 
 use commands::{
-    add_recent_file, add_test_case, check_syntax, clear_recent_files, compile_and_run, create_test_suite,
-    delete_custom_theme_image, delete_test_suite, extract_code_symbols,
-    find_or_create_suite_by_doc_path, format_code, generate_cfg, get_all_case_previews,
-    get_case_full_expected, get_case_preview, get_custom_theme_image_path, get_recent_files,
-    get_settings, import_test_cases, load_test_suite, open_file, read_file_bytes,
-    remove_recent_file, remove_test_case, resize_pty, run_tests, save_custom_theme_image,
-    save_file, save_settings, start_pty_run, stop_pty_run, stop_run, update_test_case,
-    update_view_menu_state, write_pty_stdin,
+    add_recent_file, add_test_case, check_syntax, clear_build_cache, clear_recent_files,
+    compile_and_run, create_test_suite, delete_custom_theme_image, delete_test_suite,
+    extract_code_symbols, find_or_create_suite_by_doc_path, format_code, generate_cfg,
+    get_all_case_previews, get_build_cache_stats, get_case_full_expected, get_case_preview,
+    get_custom_theme_image_path, get_recent_files, get_settings, import_test_cases,
+    load_test_suite, open_file, read_file_bytes, remove_recent_file, remove_test_case,
+    resize_pty, run_tests, save_custom_theme_image, save_file, save_settings, start_pty_run,
+    stop_pty_run, stop_run, update_test_case, update_view_menu_state, write_pty_stdin,
 };
 use build_cache::BuildCache;
+use pch_cache::PchCache;
 use pty::PtyManager;
 use run_manager::RunManager;
 #[cfg(target_os = "macos")]
@@ -139,6 +141,8 @@ pub fn run() {
             remove_recent_file,
             clear_recent_files,
             format_code,
+            get_build_cache_stats,
+            clear_build_cache,
             update_view_menu_state,
             extract_code_symbols,
             check_syntax,
@@ -160,6 +164,14 @@ pub fn run() {
                 .map(|p| p.join("build_cache"))
                 .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error>)?;
             app.manage(BuildCache::new(cache_dir));
+
+            // 注册 PCH 预编译头缓存（仅 Windows 生效，目录结构全平台保留以便测试）
+            let pch_dir = app
+                .path()
+                .app_data_dir()
+                .map(|p| p.join("pch_cache"))
+                .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error>)?;
+            app.manage(PchCache::new(pch_dir));
 
             // 注册 single-instance 插件：必须第一个，处理热启动时新实例 args 转发
             #[cfg(desktop)]

@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use crate::build_cache::{build_cache_key, BuildCache};
 use crate::config::CompilerConfig;
 use crate::error::AppError;
+use crate::pch_cache::{generate_pch, pch_platform_enabled, PchCache};
 use crate::run_manager::{RunKind, RunManager};
 use crate::runner::{run_with_limits, KillReason, ResourceLimits};
 use crate::settings::{self, AppSettings};
@@ -69,6 +70,7 @@ pub enum CompileResult {
 ///
 /// 在 work_dir 中写 main.cpp 并编译为 main 可执行文件。
 /// `scenario` 决定使用哪套编译参数（Run=快速运行 O0，Test=多样例测试 O2）。
+/// `pch_gch` 为 Some 时编译命令追加 `-include-pch <path>` 复用预编译头（仅加速过程，不改变产物）。
 /// 调用者负责持有 work_dir（TempDir）直到不再需要 exe。
 ///
 /// `cancel_token` 由调用方 clone 传入，支持编译阶段取消。
@@ -79,6 +81,7 @@ pub async fn compile_only(
     work_dir: &Path,
     compile_limits: ResourceLimits,
     cancel_token: Option<CancellationToken>,
+    pch_gch: Option<&Path>,
 ) -> Result<CompileResult, AppError> {
     // 写 main.cpp
     let main_cpp = work_dir.join("main.cpp");
@@ -93,6 +96,10 @@ pub async fn compile_only(
     let exe_path = work_dir.join(exe_name);
     let mut compile_cmd: Vec<String> = vec![config.compiler_path.to_string_lossy().into_owned()];
     compile_cmd.extend(config.args_for(scenario).iter().cloned());
+    if let Some(gch) = pch_gch {
+        compile_cmd.push("-include-pch".into());
+        compile_cmd.push(gch.to_string_lossy().into_owned());
+    }
     compile_cmd.push("-o".into());
     compile_cmd.push(exe_path.to_string_lossy().into_owned());
     compile_cmd.push(main_cpp.to_string_lossy().into_owned());
@@ -136,6 +143,9 @@ pub async fn compile_only(
 /// 缓存未命中：调用 `compile_only` 正常编译，成功后写入缓存。
 /// 拷贝失败时删除可疑缓存条目并回退到正常编译，保证健壮性。
 ///
+/// PCH（仅 Windows + 代码含 bits/stdc++.h）：编译前查可用预编译头，命中则加速编译；
+/// 未命中且可生成时 spawn 后台 task 生成（不阻塞本次编译），下次编译开始加速。
+///
 /// `cache=None` 时退化为 `compile_only`（用于单元测试）。
 pub async fn compile_with_cache(
     code: &str,
@@ -145,7 +155,35 @@ pub async fn compile_with_cache(
     compile_limits: ResourceLimits,
     cancel_token: Option<CancellationToken>,
     cache: Option<&BuildCache>,
+    pch: Option<&PchCache>,
 ) -> Result<CompileResult, AppError> {
+    // 查可用 PCH（平台开关在 acquire_pch 语义之外，用运行时布尔保证全平台可测）
+    let pch_gch = if pch_platform_enabled() {
+        pch.and_then(|p| p.acquire_pch(config, scenario, code))
+    } else {
+        None
+    };
+
+    // PCH 未命中且可生成 → spawn 后台生成 task（本次编译不等待）
+    if pch_gch.is_none() && pch_platform_enabled() {
+        if let Some(p) = pch {
+            if let Some((hash, hash_dir)) = p.try_start_generation(config, scenario) {
+                let compiler = config.compiler_path.clone();
+                let args: Vec<String> = config.args_for(scenario).to_vec();
+                // PCH 生成比普通编译慢（一次性开销），超时取 compile_timeout 与 30s 的较大者
+                let timeout = config.compile_timeout.max(std::time::Duration::from_secs(30));
+                let limits = compile_limits;
+                let cache_clone = p.clone();
+                tokio::spawn(async move {
+                    match generate_pch(&compiler, &args, &hash_dir, timeout, limits).await {
+                        Ok(_) => cache_clone.finish_generation(hash),
+                        Err(_) => cache_clone.abort_generation(hash),
+                    }
+                });
+            }
+        }
+    }
+
     // cache_key 在 cache 分支内计算，避免 cache=None 时浪费
     if let Some(cache) = cache {
         let key = build_cache_key(code, config, scenario);
@@ -171,9 +209,17 @@ pub async fn compile_with_cache(
             }
         }
 
-        // 未命中或拷贝失败回退：正常编译
-        let result =
-            compile_only(code, config, scenario, work_dir, compile_limits, cancel_token).await?;
+        // 未命中或拷贝失败回退：正常编译（可能带 -include-pch）
+        let result = compile_only(
+            code,
+            config,
+            scenario,
+            work_dir,
+            compile_limits,
+            cancel_token,
+            pch_gch.as_deref(),
+        )
+        .await?;
 
         // 编译成功后写入缓存（仅 Success 才缓存，Failed 不缓存）
         if let CompileResult::Success { exe_path, .. } = &result {
@@ -183,7 +229,16 @@ pub async fn compile_with_cache(
         Ok(result)
     } else {
         // 无缓存：直接走 compile_only
-        compile_only(code, config, scenario, work_dir, compile_limits, cancel_token).await
+        compile_only(
+            code,
+            config,
+            scenario,
+            work_dir,
+            compile_limits,
+            cancel_token,
+            pch_gch.as_deref(),
+        )
+        .await
     }
 }
 
@@ -218,6 +273,7 @@ pub async fn compile_and_run(
     app: AppHandle,
     manager: State<'_, RunManager>,
     cache: State<'_, BuildCache>,
+    pch: State<'_, PchCache>,
 ) -> Result<RunResult, AppError> {
     // 接受前端传入的 run_id，让停止按钮在 invoke 前就可用
     let cancel_token = manager
@@ -252,6 +308,7 @@ pub async fn compile_and_run(
         &config,
         limits,
         &cache,
+        &pch,
     )
     .await;
     // guard 自然 drop 时调用 complete，释放 RunManager 会话。
@@ -269,6 +326,7 @@ async fn run_compile_and_run_inner(
     config: &CompilerConfig,
     limits: ResourceLimits,
     cache: &BuildCache,
+    pch: &PchCache,
 ) -> Result<RunResult, AppError> {
     let work_dir = TempDir::new()?;
     let work_path = work_dir.path().to_path_buf();
@@ -282,6 +340,7 @@ async fn run_compile_and_run_inner(
         limits,
         Some(cancel_token.clone()),
         Some(cache),
+        Some(pch),
     )
     .await?
     {
@@ -334,9 +393,46 @@ async fn run_compile_and_run_inner(
     })
 }
 
+/// 编译缓存统计（exe 产物 + PCH），供设置面板展示占用
+#[derive(Serialize)]
+pub struct BuildCacheStats {
+    pub exe_count: usize,
+    pub exe_bytes: u64,
+    pub pch_count: usize,
+    pub pch_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn get_build_cache_stats(
+    cache: State<'_, BuildCache>,
+    pch: State<'_, PchCache>,
+) -> Result<BuildCacheStats, AppError> {
+    let (exe_count, exe_bytes) = cache.stats();
+    let (pch_count, pch_bytes) = pch.stats();
+    Ok(BuildCacheStats {
+        exe_count,
+        exe_bytes,
+        pch_count,
+        pch_bytes,
+        total_bytes: exe_bytes + pch_bytes,
+    })
+}
+
+#[tauri::command]
+pub async fn clear_build_cache(
+    cache: State<'_, BuildCache>,
+    pch: State<'_, PchCache>,
+) -> Result<(), AppError> {
+    cache.clear();
+    pch.clear();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pch_cache::PchCache;
     use crate::settings::AppSettings;
     use tempfile::TempDir as TestTempDir;
 
@@ -355,6 +451,13 @@ mod tests {
         (cache, tmp)
     }
 
+    /// 为测试创建独立 PchCache（独立临时目录）
+    fn test_pch() -> (PchCache, TestTempDir) {
+        let tmp = TestTempDir::new().unwrap();
+        let pch = PchCache::new(tmp.path().join("pch"));
+        (pch, tmp)
+    }
+
     #[tokio::test]
     async fn compile_and_run_hello_world() {
         let code = r#"#include <iostream>
@@ -366,8 +469,9 @@ int main() {
 "#;
         let (config, limits) = test_config();
         let (cache, _tmp) = test_cache();
+        let (pch, _pch_tmp) = test_pch();
         let cancel_token = CancellationToken::new();
-        let result = run_compile_and_run_inner(code.into(), None, "test".into(), cancel_token, &config, limits, &cache)
+        let result = run_compile_and_run_inner(code.into(), None, "test".into(), cancel_token, &config, limits, &cache, &pch)
             .await
             .expect("应编译运行成功");
         assert_eq!(result.stage, RunStage::Ran);
@@ -389,8 +493,9 @@ int main() {
 "#;
         let (config, limits) = test_config();
         let (cache, _tmp) = test_cache();
+        let (pch, _pch_tmp) = test_pch();
         let cancel_token = CancellationToken::new();
-        let result = run_compile_and_run_inner(code.into(), Some("21".into()), "test".into(), cancel_token, &config, limits, &cache)
+        let result = run_compile_and_run_inner(code.into(), Some("21".into()), "test".into(), cancel_token, &config, limits, &cache, &pch)
             .await
             .expect("应编译运行成功");
         assert_eq!(result.stdout.replace('\r', ""), "42\n");
@@ -406,8 +511,9 @@ int main() {
 "#;
         let (config, limits) = test_config();
         let (cache, _tmp) = test_cache();
+        let (pch, _pch_tmp) = test_pch();
         let cancel_token = CancellationToken::new();
-        let result = run_compile_and_run_inner(bad_code.into(), None, "test".into(), cancel_token, &config, limits, &cache)
+        let result = run_compile_and_run_inner(bad_code.into(), None, "test".into(), cancel_token, &config, limits, &cache, &pch)
             .await
             .expect("应返回编译失败结果");
         assert_eq!(result.stage, RunStage::CompileFailed);
@@ -432,7 +538,7 @@ int main() { return 0; }
 "#;
         let (config, limits) = test_config();
         let work_dir = TempDir::new().unwrap();
-        let result = compile_only(warning_code, &config, CompileScenario::Run, work_dir.path(), limits, None)
+        let result = compile_only(warning_code, &config, CompileScenario::Run, work_dir.path(), limits, None, None)
             .await
             .expect("应编译成功（warning 不阻止编译）");
         match result {
@@ -466,7 +572,7 @@ int main() { return 0; }
         let bad_code = "int main() { int a = 10 }";
         let (config, limits) = test_config();
         let work_dir = TempDir::new().unwrap();
-        let result = compile_only(bad_code, &config, CompileScenario::Run, work_dir.path(), limits, None)
+        let result = compile_only(bad_code, &config, CompileScenario::Run, work_dir.path(), limits, None, None)
             .await
             .expect("应返回编译失败结果");
         match result {
@@ -537,11 +643,12 @@ int main() { cout << "cached" << endl; return 0; }
 "#;
         let (config, limits) = test_config();
         let (cache, _tmp) = test_cache();
+        let (pch, _pch_tmp) = test_pch();
         let key = build_cache_key(code, &config, CompileScenario::Run);
 
         // 第一次：未命中，正常编译
         let work1 = TempDir::new().unwrap();
-        let r1 = compile_with_cache(code, &config, CompileScenario::Run, work1.path(), limits, None, Some(&cache))
+        let r1 = compile_with_cache(code, &config, CompileScenario::Run, work1.path(), limits, None, Some(&cache), Some(&pch))
             .await
             .expect("首次编译应成功");
         let exe1 = match r1 {
@@ -553,7 +660,7 @@ int main() { cout << "cached" << endl; return 0; }
 
         // 第二次：命中缓存，exe_path 应在新的 work_dir 中（拷贝而来）
         let work2 = TempDir::new().unwrap();
-        let r2 = compile_with_cache(code, &config, CompileScenario::Run, work2.path(), limits, None, Some(&cache))
+        let r2 = compile_with_cache(code, &config, CompileScenario::Run, work2.path(), limits, None, Some(&cache), Some(&pch))
             .await
             .expect("缓存命中应返回 Success");
         match r2 {
@@ -578,7 +685,7 @@ int main() { cout << "no_cache" << endl; return 0; }
 "#;
         let (config, limits) = test_config();
         let work = TempDir::new().unwrap();
-        let result = compile_with_cache(code, &config, CompileScenario::Run, work.path(), limits, None, None)
+        let result = compile_with_cache(code, &config, CompileScenario::Run, work.path(), limits, None, None, None)
             .await
             .expect("cache=None 应正常编译");
         assert!(matches!(result, CompileResult::Success { .. }));
@@ -590,10 +697,11 @@ int main() { cout << "no_cache" << endl; return 0; }
         let bad_code = "int main() { syntax error }";
         let (config, limits) = test_config();
         let (cache, _tmp) = test_cache();
+        let (pch, _pch_tmp) = test_pch();
         let key = build_cache_key(bad_code, &config, CompileScenario::Run);
 
         let work = TempDir::new().unwrap();
-        let result = compile_with_cache(bad_code, &config, CompileScenario::Run, work.path(), limits, None, Some(&cache))
+        let result = compile_with_cache(bad_code, &config, CompileScenario::Run, work.path(), limits, None, Some(&cache), Some(&pch))
             .await
             .expect("应返回编译失败结果（不 panic）");
         assert!(matches!(result, CompileResult::Failed { .. }));
@@ -611,13 +719,14 @@ int main() { std::cout << 2; return 0; }
 "#;
         let (config, limits) = test_config();
         let (cache, _tmp) = test_cache();
+        let (pch, _pch_tmp) = test_pch();
         let key1 = build_cache_key(code1, &config, CompileScenario::Run);
         let key2 = build_cache_key(code2, &config, CompileScenario::Run);
         assert_ne!(key1, key2, "不同代码应有不同 key");
 
         // 编译 code1
         let w1 = TempDir::new().unwrap();
-        let _ = compile_with_cache(code1, &config, CompileScenario::Run, w1.path(), limits, None, Some(&cache))
+        let _ = compile_with_cache(code1, &config, CompileScenario::Run, w1.path(), limits, None, Some(&cache), Some(&pch))
             .await
             .expect("code1 应编译成功");
         assert!(cache.get(key1).is_some());
@@ -632,13 +741,14 @@ int main() { return 0; }
 "#;
         let (config, limits) = test_config();
         let (cache, _tmp) = test_cache();
+        let (pch, _pch_tmp) = test_pch();
         let key_run = build_cache_key(code, &config, CompileScenario::Run);
         let key_test = build_cache_key(code, &config, CompileScenario::Test);
         assert_ne!(key_run, key_test, "Run 和 Test 应有不同 key");
 
         // 仅编译 Run 场景
         let w = TempDir::new().unwrap();
-        let _ = compile_with_cache(code, &config, CompileScenario::Run, w.path(), limits, None, Some(&cache))
+        let _ = compile_with_cache(code, &config, CompileScenario::Run, w.path(), limits, None, Some(&cache), Some(&pch))
             .await
             .expect("Run 编译应成功");
         assert!(cache.get(key_run).is_some(), "Run 应缓存命中");
@@ -654,11 +764,12 @@ int main() { cout << "hi" << endl; return 0; }
 "#;
         let (config, limits) = test_config();
         let (cache, _tmp) = test_cache();
+        let (pch, _pch_tmp) = test_pch();
 
         // 第一次：编译并写入缓存
         let r1 = run_compile_and_run_inner(
             code.into(), None, "run1".into(), CancellationToken::new(),
-            &config, limits, &cache,
+            &config, limits, &cache, &pch,
         )
         .await
         .expect("第一次运行应成功");
@@ -667,7 +778,7 @@ int main() { cout << "hi" << endl; return 0; }
         // 第二次：应命中缓存（输出应一致，且不报错）
         let r2 = run_compile_and_run_inner(
             code.into(), None, "run2".into(), CancellationToken::new(),
-            &config, limits, &cache,
+            &config, limits, &cache, &pch,
         )
         .await
         .expect("第二次运行应成功（命中缓存）");

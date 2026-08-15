@@ -183,6 +183,35 @@ impl BuildCache {
             }
         }
     }
+
+    /// 清空所有缓存条目并删除磁盘子目录（保留 cache_dir 本身）。
+    pub fn clear(&self) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.clear();
+        }
+        if let Ok(subdirs) = std::fs::read_dir(&self.cache_dir) {
+            for entry in subdirs.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let _ = std::fs::remove_dir_all(&p);
+                }
+            }
+        }
+        let _ = std::fs::create_dir_all(&self.cache_dir);
+    }
+
+    /// (条目数, 磁盘占用字节数)。walkdir 递归统计。
+    pub fn stats(&self) -> (usize, u64) {
+        let count = self.entries.lock().map(|e| e.len()).unwrap_or(0);
+        let bytes = walkdir::WalkDir::new(&self.cache_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.metadata().ok())
+            .filter(|m| m.is_file())
+            .map(|m| m.len())
+            .sum();
+        (count, bytes)
+    }
 }
 
 #[cfg(test)]
@@ -410,5 +439,41 @@ mod tests {
         assert!(cache.get(key).is_none(), "remove 后应不再命中");
         let sub_dir = cache_dir.join(format!("{:016x}", key));
         assert!(!sub_dir.exists(), "remove 应删除磁盘子目录");
+    }
+
+    // ============ clear / stats 测试 ============
+
+    #[test]
+    fn test_clear_removes_all_entries_and_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let cache_dir = tmp.path().join("cache");
+        let cache = BuildCache::new(cache_dir.clone());
+
+        let dummy_exe_src = tmp.path().join("src");
+        std::fs::write(&dummy_exe_src, b"fake exe").unwrap();
+        cache.insert(0x1, &dummy_exe_src, "a");
+        cache.insert(0x2, &dummy_exe_src, "b");
+        assert_eq!(cache.stats().0, 2);
+
+        cache.clear();
+        assert_eq!(cache.stats().0, 0, "clear 后 entries 应清空");
+        assert!(cache.get(0x1).is_none());
+        assert!(cache_dir.exists(), "cache_dir 本身保留");
+        assert!(cache_dir.read_dir().unwrap().next().is_none(), "子目录应全部删除");
+    }
+
+    #[test]
+    fn test_stats_counts_files() {
+        let tmp = TempDir::new().unwrap();
+        let cache = BuildCache::new(tmp.path().join("cache"));
+
+        // 构造含已知大小文件的缓存条目（exe 500B + main.cpp 300B）
+        let src = tmp.path().join("src");
+        std::fs::write(&src, vec![0u8; 500]).unwrap();
+        cache.insert(0x7, &src, &"x".repeat(300));
+
+        let (count, bytes) = cache.stats();
+        assert_eq!(count, 1);
+        assert_eq!(bytes, 800, "应递归统计 exe + main.cpp 字节");
     }
 }

@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,28 @@ interface SettingsPanelProps {
 }
 
 type Section = "general" | "editor" | "language" | "shortcuts";
+
+// 编译缓存统计（与后端 BuildCacheStats 对齐，serde snake_case）
+interface BuildCacheStats {
+  exe_count: number;
+  exe_bytes: number;
+  pch_count: number;
+  pch_bytes: number;
+  total_bytes: number;
+}
+
+// 字节数格式化：B → KB/MB/GB，一位小数
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = bytes;
+  let i = -1;
+  do {
+    v /= 1024;
+    i++;
+  } while (v >= 1024 && i < units.length - 1);
+  return `${v.toFixed(1)} ${units[i]}`;
+}
 
 const CPP_STANDARDS = ["c++11", "c++14", "c++17", "c++20"];
 const OPT_LEVELS = ["O0", "O1", "O2", "O3"];
@@ -544,6 +567,37 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const handleClearRecent = async () => {
     await invoke("clear_recent_files").catch(() => {});
     setMsg(t("recent.cleared", { title: t("recent.title") }));
+  };
+
+  // 编译缓存：统计在面板打开时拉取（后台可能新生成 PCH，重开面板刷新）
+  const [cacheStats, setCacheStats] = useState<BuildCacheStats | null>(null);
+  const [clearingCache, setClearingCache] = useState(false);
+  const [confirmClearCache, setConfirmClearCache] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      invoke<BuildCacheStats>("get_build_cache_stats")
+        .then(setCacheStats)
+        .catch(() => {});
+    }
+  }, [open]);
+
+  const handleClearBuildCache = async () => {
+    setClearingCache(true);
+    setErrorMsg(null);
+    try {
+      await invoke("clear_build_cache");
+      const s = await invoke<BuildCacheStats>("get_build_cache_stats").catch(
+        () => null
+      );
+      setCacheStats(s);
+      setMsg(t("settings.buildCacheCleared"));
+    } catch (e) {
+      setErrorMsg(t("settings.buildCacheClearFailed", { detail: String(e) }));
+    } finally {
+      setClearingCache(false);
+      setConfirmClearCache(false);
+    }
   };
 
   // 关闭面板：清理本次新建但未保存的暂存图片（保留已持久化的原图片）
@@ -1113,6 +1167,37 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   <p className="settings-hint">{t("settings.extraArgsHint")}</p>
 
                   <h4 className="settings-section-title pt-2">
+                    {t("settings.buildCache")}
+                  </h4>
+                  <div className="grid grid-cols-[160px_1fr] items-center gap-3">
+                    <Label htmlFor="set-build-cache">
+                      {t("settings.buildCacheSize")}
+                    </Label>
+                    <span
+                      id="set-build-cache"
+                      className="text-sm text-muted-foreground"
+                    >
+                      {cacheStats
+                        ? t("settings.buildCacheSummary", {
+                            exe: cacheStats.exe_count,
+                            pch: cacheStats.pch_count,
+                            size: formatBytes(cacheStats.total_bytes),
+                          })
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-[160px_1fr] items-center gap-3">
+                    <span />
+                    <Button
+                      variant="compact"
+                      disabled={clearingCache}
+                      onClick={() => setConfirmClearCache(true)}
+                    >
+                      {t("settings.clearBuildCache")}
+                    </Button>
+                  </div>
+
+                  <h4 className="settings-section-title pt-2">
                     {t("settings.runtime")}
                   </h4>
                   <div className="grid grid-cols-[160px_1fr] items-center gap-3">
@@ -1305,6 +1390,34 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             {saving ? "…" : t("settings.save")}
           </Button>
         </DialogFooter>
+
+        {/* 清空编译缓存确认（清空 PCH 后重新生成需数秒，误点代价高于清空最近文件） */}
+        <Dialog open={confirmClearCache} onOpenChange={setConfirmClearCache}>
+          <DialogContent className="sm:max-w-[420px]">
+            <DialogHeader>
+              <DialogTitle>{t("settings.clearBuildCacheConfirmTitle")}</DialogTitle>
+              <DialogDescription>
+                {t("settings.clearBuildCacheConfirmDesc")}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setConfirmClearCache(false)}
+                disabled={clearingCache}
+              >
+                {t("settings.cancel")}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => void handleClearBuildCache()}
+                disabled={clearingCache}
+              >
+                {clearingCache ? "…" : t("settings.clearBuildCache")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   );
