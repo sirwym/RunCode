@@ -20,6 +20,7 @@
 - **Monaco 编辑器** — VS Code 同款，教学友好的语法高亮 / 括号补全 / 代码补全，内置中文本地化
 - **C++ 速查表** — 内置常用语法速查，快速查阅 STL 容器、算法、IO 等教学常用代码片段
 - **多样例测试** — 一次性运行多组样例，支持按测试点勾选运行 / 全选一键切换，支持 stdin / expected 文件导入
+- **编译缓存 + PCH 提速** — 相同代码重复运行跳过编译直接执行；Windows 下 `bits/stdc++.h` 预编译头后台生成，大幅缩短首次编译（详见 [ADR-0007](docs/adr/0007-compile-acceleration-cache.md)）
 - **时间限制判定** — 单例超时判失败（OI 友好，默认 1000ms，可配置）
 - **实时终端** — PTY 终端支持交互式输入（macOS forkpty / Windows ConPTY）
 - **代码格式化** — tree-sitter 解析 + 内置 formatter
@@ -37,6 +38,7 @@
 - **运行内存**：主进程 ~35MB；完整实例（含 WebKit/WebView2 + Monaco）macOS ~260MB / Windows ~240MB（对比 Electron 同类应用通常 300MB+，仍更轻量）
 - **启动时间**：秒级（冷启动 <1s）
 - **无 Electron 包袱**：不打包 Chromium 内核，系统 webview 原生渲染
+- **编译缓存磁盘占用**：BuildCache LRU 20 条 < 8MB + PCH 缓存 2 套，设置面板可一键清空
 
 适合教学场景对资源占用敏感的机房环境。
 

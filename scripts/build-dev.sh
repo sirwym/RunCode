@@ -30,7 +30,7 @@ fi
 if [ ! -d "$DMG_DIR" ]; then
   echo ""
   echo "⚠ DMG 未自动生成（可能因沙箱限制），手动执行："
-  echo "  hdiutil create -volname RunCode -srcfolder '$APP_PATH' -ov -format UDZO '$(dirname $DMG_DIR)/RunCode_1.0.2_aarch64.dmg'"
+  echo "  hdiutil create -volname RunCode -srcfolder '$APP_PATH' -ov -format UDZO '$(dirname $DMG_DIR)/RunCode_1.1.0_aarch64.dmg'"
 fi
 
 echo ""

@@ -12,6 +12,7 @@
 | [0004](0004-test-case-time-limit.md) | 多样例测试时间限制机制 | Accepted | 2026-07-25 |
 | [0005](0005-lucide-react-icon-unification.md) | lucide-react 图标库统一 | Accepted | 2026-07-26 |
 | [0006](0006-runcode-brand-color-system.md) | RunCode 品牌色与主题令牌系统 | Accepted | 2026-07-27 |
+| [0007](0007-compile-acceleration-cache.md) | 编译加速体系：BuildCache 产物缓存 + PCH 预编译头 | Accepted | 2026-07-31 |
 
 ## 模板
 

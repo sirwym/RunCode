@@ -561,7 +561,7 @@ JetBrains Mono Variable 字体 `@font-face` 声明（仅 Latin 子集，减小�
 
 #### [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json)
 
-应用配置。`productName = "RunCode"`，`identifier = "com.cppide.teach"`，`version = "1.0.2"`。
+应用配置。`productName = "RunCode"`，`identifier = "com.cppide.teach"`，`version = "1.1.0"`。
 
 - 窗口：1200×800，最小 800×600，`titleBarStyle = "Overlay"` + `hiddenTitle = true` + `decorations = true` + `visible = false`（启动时隐藏，等自定义标题栏激活后再 show）
 - CSP：严格 `default-src 'self'`，style 允许 `tauri-plugin-decoration` + `unsafe-inline`，img 允许 `asset:` 协议，`assetProtocol.scope = ["$APPDATA/custom_themes/**"]`
@@ -1220,7 +1220,7 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 ./scripts/build-signed.sh
 ```
 
-- 产物：`src-tauri/target/release/bundle/dmg/RunCode_1.0.2_{arch}.dmg`
+- 产物：`src-tauri/target/release/bundle/dmg/RunCode_1.1.0_{arch}.dmg`
 - 体积：~10MB 级
 - 签名方式：默认 ad-hoc（`signingIdentity: "-"`），正式分发需配置 Apple Developer 账号 + 环境变量（`APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID`）
 - Hardened Runtime：通过 [entitlements.plist](../src-tauri/entitlements.plist) 启用
@@ -1231,7 +1231,7 @@ cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
 ./scripts/build-windows.ps1
 ```
 
-- 产物：`src-tauri/target/release/bundle/nsis/RunCode_1.0.2_x64-setup.exe`
+- 产物：`src-tauri/target/release/bundle/nsis/RunCode_1.1.0_x64-setup.exe`
 - 体积：~40 MB（NSIS LZMA 压缩后；TDM-GCC 原始资源约 280MB 压缩至 ~30MB + RunCode ~10MB）。安装后展开约 290 MB
 - TDM-GCC 已内置并提交到仓库，clone 后即用
 - WebView2 Runtime：使用 `downloadBootstrapper` 模式，首次安装需联网下载（约 2MB）。离线机房需提前预装 WebView2 Runtime
@@ -1386,4 +1386,4 @@ RunCode 以当前用户权限执行本地 C++ 代码，**不是恶意代码沙�
 
 ---
 
-> 本文档基于 RunCode v1.0.2 代码库生成。如有疑问或发现文档与代码不一致，请以代码为准并提 issue 修正文档。
+> 本文档基于 RunCode v1.1.0 代码库生成。如有疑问或发现文档与代码不一致，请以代码为准并提 issue 修正文档。

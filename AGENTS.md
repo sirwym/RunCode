@@ -123,6 +123,7 @@ cd src-tauri && cargo test   # 后端 Rust 测试
 | [ADR-0004](docs/adr/0004-test-case-time-limit.md) | 测试时间限制机制 | judge_case_passed 纯函数 + 默认 1000ms |
 | [ADR-0005](docs/adr/0005-lucide-react-icon-unification.md) | lucide-react 图标库统一 | 所有图标必须用 lucide-react |
 | [ADR-0006](docs/adr/0006-runcode-brand-color-system.md) | RunCode 品牌色与主题令牌系统 | 品牌交互色必须用令牌，禁止散落 HEX；图标资产禁改 |
+| [ADR-0007](docs/adr/0007-compile-acceleration-cache.md) | 编译加速：BuildCache 产物缓存 + PCH 预编译头 | BuildCache LRU 20 条（<8MB）、失败回退编译；PCH 仅 Windows、LRU 2 套、后台生成失败静默 |
 
 ## Git 协作规范
 

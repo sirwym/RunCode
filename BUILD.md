@@ -72,10 +72,10 @@ export APPLE_TEAM_ID="XXXXXXXXXX"
 
 ```bash
 # Gatekeeper 验证
-spctl --assess --type install --verbose "RunCode_1.0.2_aarch64.dmg"
+spctl --assess --type install --verbose "RunCode_1.1.0_aarch64.dmg"
 
 # Stapler 验证
-xcrun stapler validate "RunCode_1.0.2_aarch64.dmg"
+xcrun stapler validate "RunCode_1.1.0_aarch64.dmg"
 ```
 
 通过后，用户可双击 DMG 直接安装，无需右键打开。
@@ -126,7 +126,7 @@ xcrun notarytool log <submission-id> --apple-id "$APPLE_ID" --password "$APPLE_P
 - 使用 `xcrun stapler staple` 附加公证票据：
   ```bash
   xcrun stapler staple "RunCode.app"
-  xcrun stapler staple "RunCode_1.0.2_aarch64.dmg"
+  xcrun stapler staple "RunCode_1.1.0_aarch64.dmg"
   ```
 
 ## Windows 构建
@@ -143,7 +143,7 @@ xcrun notarytool log <submission-id> --apple-id "$APPLE_ID" --password "$APPLE_P
 
 TDM-GCC 已内置并提交到仓库（`src-tauri/resources/tdm-gcc/`），clone 后即用，无需额外准备。
 
-产出：`src-tauri/target/release/bundle/nsis/RunCode_1.0.2_x64-setup.exe`
+产出：`src-tauri/target/release/bundle/nsis/RunCode_1.1.0_x64-setup.exe`
 
 预估体积：~40 MB（NSIS LZMA 压缩后；TDM-GCC 原始资源约 280MB 压缩至 ~30MB + RunCode ~10MB）。安装后展开约 290 MB。
 
@@ -180,11 +180,11 @@ RunCode 依赖 WebView2 Runtime 渲染前端。安装包使用 `downloadBootstra
 3. 用 `signtool.exe` 签名安装包：
    ```powershell
    signtool.exe sign /a /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
-     "src-tauri/target/release/bundle/nsis/RunCode_1.0.2_x64-setup.exe"
+     "src-tauri/target/release/bundle/nsis/RunCode_1.1.0_x64-setup.exe"
    ```
 4. 验证签名：
    ```powershell
-   signtool.exe verify /pa /v "RunCode_1.0.2_x64-setup.exe"
+   signtool.exe verify /pa /v "RunCode_1.1.0_x64-setup.exe"
    ```
 
 > 注：2023 年 6 月起，新的 OV 证书需要 Hardware Root of Trust（USB token），EV 证书可直接 USB token。教学场景建议直接跳过签名。
