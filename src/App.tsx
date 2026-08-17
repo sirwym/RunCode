@@ -1047,6 +1047,7 @@ function App() {
                 ? (effectiveCustomTheme.base_mode as "light" | "dark")
                 : undefined
             }
+            syntaxOverrides={effectiveCustomTheme?.syntax_overrides}
             onFormat={formatRef.current}
           />
         </Panel>

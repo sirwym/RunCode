@@ -160,6 +160,91 @@ export function rederiveColors(
   };
 }
 
+// ============ 语法高亮色派生 ============
+
+/** 语法高亮色组（6 个 token，与 buildCustomMonacoRules / SyntaxColorPicker 对应） */
+export interface SyntaxColors {
+  keyword: string;
+  type: string;
+  string: string;
+  number: string;
+  comment: string;
+  preprocessor: string;
+}
+
+// VS dark+ / light+ 标准语法配色锚点（观感熟悉）
+// comment 门槛放宽到 3.0（WCAG AA 大字级），保留注释"次级"视觉层级
+const SYNTAX_ANCHORS: Record<"dark" | "light", SyntaxColors> = {
+  dark: {
+    keyword: "#569cd6",
+    type: "#4ec9b0",
+    string: "#ce9178",
+    number: "#b5cea8",
+    comment: "#6a9955",
+    preprocessor: "#c586c0",
+  },
+  light: {
+    keyword: "#0000ff",
+    type: "#267f99",
+    string: "#a31515",
+    number: "#098658",
+    comment: "#008000",
+    preprocessor: "#af00db",
+  },
+};
+
+/**
+ * 单个 token 的对比度保障：
+ * 循环调亮度（保色相）直到达标；中灰背景等数学上不可达的情况，
+ * 在调整结果与极值色（dark→白 / light→黑）中选对比度更高者 best-effort 返回
+ */
+function ensureSyntaxContrast(
+  hex: string,
+  bgLum: number,
+  baseMode: "dark" | "light",
+  target: number,
+): string {
+  let current = hex;
+  for (let i = 0; i < 10; i++) {
+    const [r, g, b] = hexToRgb(current);
+    if (contrastRatio(bgLum, relativeLuminance(r, g, b)) >= target) {
+      return current;
+    }
+    current = adjustLightness(current, baseMode === "dark" ? 6 : -6);
+  }
+  const extreme = baseMode === "dark" ? "#ffffff" : "#000000";
+  const [cr, cg, cb] = hexToRgb(current);
+  const [er, eg, eb] = hexToRgb(extreme);
+  return contrastRatio(bgLum, relativeLuminance(er, eg, eb)) >
+    contrastRatio(bgLum, relativeLuminance(cr, cg, cb))
+    ? extreme
+    : current;
+}
+
+/**
+ * 由编辑器底色（bg_terminal）+ baseMode 自动派生 6 个语法高亮色。
+ * 纯函数、确定性，每次 defineTheme 现算，不持久化：
+ * 换背景图后未覆盖的 token 自动适配新背景。
+ */
+export function deriveSyntaxColors(
+  bgTerminal: string,
+  baseMode: "dark" | "light",
+): SyntaxColors {
+  const [br, bg, bb] = hexToRgb(bgTerminal);
+  const bgLum = relativeLuminance(br, bg, bb);
+  const anchors = SYNTAX_ANCHORS[baseMode];
+  const derive = (hex: string, target: number) =>
+    ensureSyntaxContrast(hex, bgLum, baseMode, target);
+  return {
+    keyword: derive(anchors.keyword, 4.5),
+    type: derive(anchors.type, 4.5),
+    string: derive(anchors.string, 4.5),
+    number: derive(anchors.number, 4.5),
+    comment: derive(anchors.comment, 3.0),
+    preprocessor: derive(anchors.preprocessor, 4.5),
+  };
+}
+
 // ============ K-means 聚类 ============
 
 type Pixel = [number, number, number];

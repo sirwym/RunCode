@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CPP_KEYWORDS_ALL, type KeywordKind } from "../monaco/cppKeywords";
 import { CPP_MEMBERS, inferTypeAtDot, buildMemberSuggestions } from "../monaco/cppMembers";
+import { deriveSyntaxColors } from "../utils/colorExtract";
 
 // 平台检测（与 App.tsx / SettingsPanel.tsx 一致的内联表达式）
 const isMac =
@@ -140,6 +141,30 @@ export function monacoBaseFromMode(baseMode: "light" | "dark" | undefined): "vs"
   return baseMode === "light" ? "vs" : "vs-dark";
 }
 
+// 由 custom_theme.colors + baseMode 构造 Monaco defineTheme 的 rules 字段（语法高亮）
+// 自动派生（deriveSyntaxColors 保证对比度）+ syntax_overrides 手动覆盖合并
+// Monaco rules 的 foreground 是无 # 的 6 位 RRGGBB，与 colors map 的 #RRGGBB 格式不同
+// token 按 . 分层最长匹配：keyword 覆盖 keyword.control 等；keyword.directive（预处理）单列
+export function buildCustomMonacoRules(
+  c: CustomThemeColors,
+  baseMode: "light" | "dark" | undefined,
+  overrides?: Record<string, string>,
+): Array<{ token: string; foreground: string; fontStyle?: string }> {
+  const derived = deriveSyntaxColors(c.bg_terminal, baseMode ?? "dark");
+  const eff = { ...derived, ...overrides };
+  const strip = (hex: string) => hex.replace(/^#/, "").toLowerCase();
+  return [
+    { token: "keyword", foreground: strip(eff.keyword) },
+    { token: "keyword.directive", foreground: strip(eff.preprocessor) },
+    { token: "type", foreground: strip(eff.type) },
+    { token: "type.identifier", foreground: strip(eff.type) },
+    { token: "string", foreground: strip(eff.string) },
+    { token: "number", foreground: strip(eff.number) },
+    // comment 保留斜体（vs/vs-dark 基础主题惯例，rules 会整体替换 base 规则需显式声明）
+    { token: "comment", foreground: strip(eff.comment), fontStyle: "italic" },
+  ];
+}
+
 // 编辑器右键菜单项配置（纯数据，便于单元测试）
 // action 为 Monaco action id，custom === "format" 时调用 onFormat 回调
 // macShortcut / winShortcut 空字符串表示无快捷键提示
@@ -212,12 +237,14 @@ interface EditorPaneProps {
   customColors?: CustomThemeColors;
   /** 自定义主题 base_mode（仅 theme === "custom" 时使用，决定 Monaco 继承 vs/vs-dark） */
   baseMode?: "light" | "dark";
+  /** 自定义主题语法色手动覆盖（仅 theme === "custom" 时使用，token → 6 位 HEX） */
+  syntaxOverrides?: Record<string, string>;
   /** 格式化代码回调（右键菜单"格式化代码"项调用） */
   onFormat?: () => void;
 }
 
 const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane(
-  { onContentChange, onCursorPositionChange, settings, theme, customColors, baseMode, onFormat },
+  { onContentChange, onCursorPositionChange, settings, theme, customColors, baseMode, syntaxOverrides, onFormat },
   ref
 ) {
   const t = useI18n((s) => s.t);
@@ -249,6 +276,9 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   customColorsRef.current = customColors;
   const baseModeRef = useRef(baseMode);
   baseModeRef.current = baseMode;
+  // 用 ref 持有最新 syntaxOverrides（语法色手动覆盖），供 onMount 闭包读取最新值
+  const syntaxOverridesRef = useRef(syntaxOverrides);
+  syntaxOverridesRef.current = syntaxOverrides;
   // 用 ref 持有最新 onFormat，避免右键菜单闭包陈旧
   const onFormatRef = useRef(onFormat);
   onFormatRef.current = onFormat;
@@ -420,7 +450,7 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
       monaco.editor.defineTheme("runcode-custom", {
         base: monacoBaseFromMode(baseModeRef.current),
         inherit: true,
-        rules: [],
+        rules: buildCustomMonacoRules(cc, baseModeRef.current, syntaxOverridesRef.current),
         colors: buildCustomMonacoColors(cc),
       });
     } else {
@@ -558,8 +588,13 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
   // editor.background 始终为 #00000000（透明），editorAlpha 不再经 Monaco 主题控制
   // 用 JSON.stringify 作为依赖键，避免 customColors 对象引用变化导致无限循环
   // baseMode 决定 Monaco 继承主题（vs/vs-dark），禁止用 bg_terminal === "#ffffff" 推断
+  // syntaxOverrides 纳入依赖键，语法色手动覆盖变化时实时重定义主题
   const customColorsKey = customColors
-    ? JSON.stringify(customColors) + "|" + (baseMode ?? "dark")
+    ? JSON.stringify(customColors) +
+      "|" +
+      (baseMode ?? "dark") +
+      "|" +
+      JSON.stringify(syntaxOverrides ?? {})
     : "";
   useEffect(() => {
     const monaco = monacoRef.current;
@@ -567,7 +602,7 @@ const EditorPane = forwardRef<EditorHandle, EditorPaneProps>(function EditorPane
     monaco.editor.defineTheme("runcode-custom", {
       base: monacoBaseFromMode(baseMode),
       inherit: true,
-      rules: [],
+      rules: buildCustomMonacoRules(customColors, baseMode, syntaxOverrides),
       colors: buildCustomMonacoColors(customColors),
     });
     // 若当前正是 custom 主题，立即应用（切换中实时生效）

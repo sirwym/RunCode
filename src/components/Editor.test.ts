@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   mapMonacoTheme,
   buildCustomMonacoColors,
+  buildCustomMonacoRules,
   monacoBaseFromMode,
   RUNCODE_DARK_COLORS,
   RUNCODE_LIGHT_COLORS,
@@ -372,6 +373,75 @@ describe("Monaco 已挂载后实时更新", () => {
     const keyDark = JSON.stringify(colors) + "|dark";
     const keyLight = JSON.stringify(colors) + "|light";
     expect(keyDark).not.toBe(keyLight);
+  });
+});
+
+// buildCustomMonacoRules 输出校验：
+// Monaco rules 的 foreground 是无 # 的 6 位 RRGGBB（带 # 会被静默忽略），
+// token 覆盖 keyword / keyword.directive / type / type.identifier / string / number / comment，
+// overrides 手动覆盖优先于 deriveSyntaxColors 自动派生值。
+describe("buildCustomMonacoRules 语法高亮 rules", () => {
+  const sampleColors: CustomThemeColors = {
+    bg: "#0a0a0a",
+    panel_bg: "#141414",
+    panel_bg_alt: "#1e1e1e",
+    text: "#fafafa",
+    text_muted: "#a3a3a3",
+    border: "#2a2a2a",
+    primary: "#3b65b8",
+    primary_hover: "#4a74c6",
+    primary_foreground: "#ffffff",
+    primary_soft: "rgba(59, 101, 184, 0.14)",
+    primary_border: "rgba(59, 101, 184, 0.40)",
+    bg_terminal: "#1e1e2e",
+  };
+
+  it("所有 rules foreground 为无 # 的 6 位小写 HEX", () => {
+    const rules = buildCustomMonacoRules(sampleColors, "dark");
+    expect(rules.length).toBeGreaterThan(0);
+    for (const rule of rules) {
+      expect(rule.foreground, `${rule.token}=${rule.foreground}`).toMatch(/^[0-9a-f]{6}$/);
+    }
+  });
+
+  it("token 覆盖 7 条规则（含 keyword.directive 与 type.identifier）", () => {
+    const rules = buildCustomMonacoRules(sampleColors, "dark");
+    const tokens = rules.map((r) => r.token);
+    for (const expected of [
+      "keyword",
+      "keyword.directive",
+      "type",
+      "type.identifier",
+      "string",
+      "number",
+      "comment",
+    ]) {
+      expect(tokens, `缺少 token ${expected}`).toContain(expected);
+    }
+  });
+
+  it("overrides 优先：覆盖 keyword 后其余 token 仍为派生值", () => {
+    const noOverride = buildCustomMonacoRules(sampleColors, "dark");
+    const overridden = buildCustomMonacoRules(sampleColors, "dark", {
+      keyword: "#FF0000",
+    });
+    const kw = overridden.find((r) => r.token === "keyword");
+    expect(kw?.foreground).toBe("ff0000");
+    // 未覆盖的 string 保持派生值（与无 overrides 时一致）
+    const strBefore = noOverride.find((r) => r.token === "string");
+    const strAfter = overridden.find((r) => r.token === "string");
+    expect(strAfter?.foreground).toBe(strBefore?.foreground);
+  });
+
+  it("comment 规则 fontStyle 为 italic（保留 vs/vs-dark 惯例）", () => {
+    const rules = buildCustomMonacoRules(sampleColors, "dark");
+    const comment = rules.find((r) => r.token === "comment");
+    expect(comment?.fontStyle).toBe("italic");
+  });
+
+  it("baseMode=undefined 时按 dark 派生（不抛错）", () => {
+    const rules = buildCustomMonacoRules(sampleColors, undefined);
+    expect(rules.length).toBe(7);
   });
 });
 

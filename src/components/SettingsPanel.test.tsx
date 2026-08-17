@@ -1293,7 +1293,7 @@ describe("SettingsPanel 自定义色板与重置", () => {
     });
   }
 
-  it("State C 渲染色板，显示 5 个颜色输入", async () => {
+  it("State C 渲染色板，显示 5 个基础色 + 6 个语法色输入", async () => {
     const s = makeCustomSettings();
     useSettings.setState({ settings: s });
     setupI18n();
@@ -1303,12 +1303,14 @@ describe("SettingsPanel 自定义色板与重置", () => {
     // 等待 State C 渲染（滑块出现意味着 State C 已渲染）
     await screen.findByDisplayValue("82");
 
-    // 应有 5 个 color input（bg / panel_bg / primary / text / border）
+    // 应有 11 个 color input（5 基础色 + 6 语法色）
     const colorInputs = document.querySelectorAll('input[type="color"]');
-    expect(colorInputs).toHaveLength(5);
+    expect(colorInputs).toHaveLength(11);
 
     // 第 3 个（index 2）是 primary，值应与 draft 一致
     expect((colorInputs[2] as HTMLInputElement).value).toBe("#3b65b8");
+    // 第 6 个（index 5）是关键字语法色，默认为派生值（dark 锚点 #569cd6）
+    expect((colorInputs[5] as HTMLInputElement).value).toBe("#569cd6");
   });
 
   it("State C 修改 primary 色后，draft.colors 和 themePreview 同步更新", async () => {
@@ -1356,6 +1358,91 @@ describe("SettingsPanel 自定义色板与重置", () => {
     expect(preview?.customTheme.colors.primary_soft).toContain("59,101,184");
   });
 
+  it("State C 修改关键字语法色后，syntax_overrides 与 themePreview 同步更新", async () => {
+    const s = makeCustomSettings();
+    useSettings.setState({ settings: s });
+    setupI18n();
+
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    await screen.findByDisplayValue("82");
+
+    // keyword 是第 6 个 color input（index 5），改为 #ff0000
+    const colorInputs = document.querySelectorAll('input[type="color"]');
+    fireEvent.change(colorInputs[5], { target: { value: "#ff0000" } });
+
+    const preview = useSettings.getState().themePreview;
+    expect(preview).not.toBeNull();
+    expect(preview?.customTheme.syntax_overrides).toEqual({ keyword: "#ff0000" });
+  });
+
+  it("State C 点击重置语法色，清空全部覆盖", async () => {
+    const s = makeCustomSettings();
+    s.general.custom_theme!.syntax_overrides = { keyword: "#ff0000", comment: "#00ff00" };
+    useSettings.setState({ settings: s });
+    setupI18n();
+
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    await screen.findByDisplayValue("82");
+
+    // 覆盖过的 keyword 应显示覆盖值
+    const colorInputs = document.querySelectorAll('input[type="color"]');
+    expect((colorInputs[5] as HTMLInputElement).value).toBe("#ff0000");
+
+    // 点击"重置语法色"
+    await user.click(screen.getByText(zh.settings.resetSyntaxColors));
+
+    const preview = useSettings.getState().themePreview;
+    expect(preview?.customTheme.syntax_overrides).toBeUndefined();
+    // keyword 回到自动派生值（dark 锚点 #569cd6）
+    expect((colorInputs[5] as HTMLInputElement).value).toBe("#569cd6");
+  });
+
+  it("State C 重置为提取色时同时清空 syntax_overrides", async () => {
+    const s = makeCustomSettings();
+    s.general.custom_theme!.syntax_overrides = { keyword: "#ff0000" };
+    useSettings.setState({ settings: s });
+    setupI18n();
+
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    await screen.findByDisplayValue("82");
+
+    // 点击"重置为提取色"
+    await userEvent.setup().click(screen.getByText(zh.settings.resetColors));
+
+    const preview = useSettings.getState().themePreview;
+    expect(preview?.customTheme.syntax_overrides).toBeUndefined();
+    expect(preview?.customTheme.colors.primary).toBe("#3b65b8");
+  });
+
+  it("State C 修改语法色后保存，syntax_overrides 持久化", async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const s = makeCustomSettings();
+    useSettings.setState({ settings: s, save: saveMock });
+    setupI18n();
+
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+
+    await screen.findByDisplayValue("82");
+
+    // 修改 keyword（index 5）为 #00ff00
+    const colorInputs = document.querySelectorAll('input[type="color"]');
+    fireEvent.change(colorInputs[5], { target: { value: "#00ff00" } });
+
+    await user.click(screen.getByText(zh.settings.save));
+
+    await vi.waitFor(() => {
+      expect(saveMock).toHaveBeenCalled();
+    });
+
+    const saved = saveMock.mock.calls[0][0] as AppSettings;
+    expect(saved.general.custom_theme?.syntax_overrides).toEqual({ keyword: "#00ff00" });
+  });
+
   it("State A（未导入）不渲染色板和重置按钮", async () => {
     const s = makeSettings();
     s.general.theme = "custom";
@@ -1393,9 +1480,9 @@ describe("SettingsPanel 自定义色板与重置", () => {
     // 等待 State B 渲染（应用按钮出现）
     await screen.findByText(zh.settings.applyTheme);
 
-    // State B 应有色板（5 个 color input）
+    // State B 应有色板（5 基础色 + 6 语法色 = 11 个 color input）
     const colorInputs = document.querySelectorAll('input[type="color"]');
-    expect(colorInputs).toHaveLength(5);
+    expect(colorInputs).toHaveLength(11);
 
     // 修改 primary 色（index 2）为 #ff0000
     fireEvent.change(colorInputs[2], { target: { value: "#ff0000" } });

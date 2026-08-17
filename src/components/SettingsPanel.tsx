@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import CustomThemePreview, { CustomThemeSliders, CustomThemeColorPicker } from "./CustomThemePreview";
+import CustomThemePreview, { CustomThemeSliders, CustomThemeColorPicker, SyntaxColorPicker } from "./CustomThemePreview";
 import { mapMonacoTheme } from "./Editor";
 import { getEffectiveTheme, type SettingsTheme } from "../utils/theme";
 import {
@@ -34,7 +34,9 @@ import {
   loadVideoFirstFrameToImageData,
   isVideoFile,
   rederiveColors,
+  deriveSyntaxColors,
   type ExtractedColors,
+  type SyntaxColors,
 } from "../utils/colorExtract";
 
 interface SettingsPanelProps {
@@ -169,6 +171,8 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const msgTimerRef = useRef<number | null>(null);
   // 自定义图片主题状态
   const [previewColors, setPreviewColors] = useState<ExtractedColors | null>(null);
+  // 预览期间最新的语法色覆盖（onSyntaxChange 更新；滑块/色板回调构造 previewCt 时携带）
+  const [previewSyntaxOverrides, setPreviewSyntaxOverrides] = useState<Record<string, string>>({});
   const [pendingImagePath, setPendingImagePath] = useState<string | null>(null);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -324,6 +328,9 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setPreviewColors(colors);
       setPendingImagePath(selected);
       setPreviewImageUrl(url);
+      // 语法色覆盖沿用 draft 已有值（重新导入保留，与滑块策略一致）
+      const draftOverrides = draft?.general.custom_theme?.syntax_overrides ?? {};
+      setPreviewSyntaxOverrides(draftOverrides);
       // 记录提取的原始颜色（用于后续重置功能）
       originalColorsRef.current = colors;
 
@@ -350,6 +357,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         panel_alpha: draftCt?.panel_alpha ?? 82,
         editor_alpha: draftCt?.editor_alpha ?? 92,
         mask_opacity: draftCt?.mask_opacity ?? 20,
+        syntax_overrides: Object.keys(draftOverrides).length > 0 ? draftOverrides : undefined,
       };
       syncThemePreview(previewCt, url);
     } catch (e) {
@@ -366,6 +374,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     panelAlpha: number;
     editorAlpha: number;
     maskOpacity: number;
+    syntaxOverrides: Record<string, string>;
   }) => {
     if (!previewColors || !pendingImagePath) return;
 
@@ -411,6 +420,11 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         panel_alpha: params.panelAlpha,
         editor_alpha: params.editorAlpha,
         mask_opacity: params.maskOpacity,
+        // 空覆盖集不持久化（避免空 map 进 schema）
+        syntax_overrides:
+          Object.keys(params.syntaxOverrides).length > 0
+            ? params.syntaxOverrides
+            : undefined,
       };
       setDraft((d) =>
         d
@@ -480,7 +494,44 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     );
   };
 
-  // State C：重置为提取色（从 originalColorsRef 恢复）
+  // State C：语法色覆盖变更 → 更新 draft.syntax_overrides + 同步主编辑器预览
+  const handleSyntaxColorChange = (token: keyof SyntaxColors, color: string) => {
+    const ct = draft?.general.custom_theme;
+    if (!ct) return;
+    const next = { ...(ct.syntax_overrides ?? {}), [token]: color };
+    setDraft((d) =>
+      d && d.general.custom_theme
+        ? {
+            ...d,
+            general: {
+              ...d.general,
+              custom_theme: { ...d.general.custom_theme, syntax_overrides: next },
+            },
+          }
+        : d
+    );
+    syncThemePreview({ ...ct, syntax_overrides: next }, previewBlobUrlRef.current ?? undefined);
+  };
+
+  // State C：整组重置语法色（清空覆盖，回到自动派生）
+  const handleSyntaxReset = () => {
+    const ct = draft?.general.custom_theme;
+    if (!ct) return;
+    setDraft((d) =>
+      d && d.general.custom_theme
+        ? {
+            ...d,
+            general: {
+              ...d.general,
+              custom_theme: { ...d.general.custom_theme, syntax_overrides: undefined },
+            },
+          }
+        : d
+    );
+    syncThemePreview({ ...ct, syntax_overrides: undefined }, previewBlobUrlRef.current ?? undefined);
+  };
+
+  // State C：重置为提取色（从 originalColorsRef 恢复；语法色覆盖一并清空）
   const handleResetColors = () => {
     const original = originalColorsRef.current;
     const ct = draft?.general.custom_theme;
@@ -493,13 +544,17 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             ...d,
             general: {
               ...d.general,
-              custom_theme: { ...d.general.custom_theme, colors: originalColors },
+              custom_theme: {
+                ...d.general.custom_theme,
+                colors: originalColors,
+                syntax_overrides: undefined,
+              },
             },
           }
         : d
     );
     syncThemePreview(
-      { ...ct, colors: originalColors },
+      { ...ct, colors: originalColors, syntax_overrides: undefined },
       previewBlobUrlRef.current ?? undefined,
     );
   };
@@ -727,9 +782,25 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                             initialPanelAlpha={draft?.general.custom_theme?.panel_alpha ?? 82}
                             initialEditorAlpha={draft?.general.custom_theme?.editor_alpha ?? 92}
                             initialMaskOpacity={draft?.general.custom_theme?.mask_opacity ?? 20}
+                            initialSyntaxOverrides={previewSyntaxOverrides}
                             onApply={(params) => {
                               // 原子传递 params 给 handleApplyCustomTheme
                               void handleApplyCustomTheme(params);
+                            }}
+                            onSyntaxChange={(overrides) => {
+                              // 语法色覆盖实时变化：同步状态 + 主编辑器预览
+                              setPreviewSyntaxOverrides(overrides);
+                              const draftCt = draft?.general.custom_theme;
+                              const previewCt: CustomThemeConfig = {
+                                image_file: "__preview__",
+                                colors: { ...previewColors },
+                                base_mode: previewColors.baseMode,
+                                panel_alpha: draftCt?.panel_alpha ?? 82,
+                                editor_alpha: draftCt?.editor_alpha ?? 92,
+                                mask_opacity: draftCt?.mask_opacity ?? 20,
+                                syntax_overrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+                              };
+                              syncThemePreview(previewCt, previewImageUrl ?? undefined);
                             }}
                             onSliderChange={(params) => {
                               // 滑块实时变化：同步主题预览（用 previewColors + blob URL）
@@ -753,6 +824,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                                 panel_alpha: params.panelAlpha,
                                 editor_alpha: params.editorAlpha,
                                 mask_opacity: params.maskOpacity,
+                                syntax_overrides: Object.keys(previewSyntaxOverrides).length > 0 ? previewSyntaxOverrides : undefined,
                               };
                               syncThemePreview(previewCt, previewImageUrl ?? undefined);
                             }}
@@ -771,6 +843,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                                 panel_alpha: draftCt?.panel_alpha ?? 82,
                                 editor_alpha: draftCt?.editor_alpha ?? 92,
                                 mask_opacity: draftCt?.mask_opacity ?? 20,
+                                syntax_overrides: Object.keys(previewSyntaxOverrides).length > 0 ? previewSyntaxOverrides : undefined,
                               };
                               syncThemePreview(previewCt, previewImageUrl ?? undefined);
                             }}
@@ -832,6 +905,18 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                               text={draft.general.custom_theme.colors.text}
                               border={draft.general.custom_theme.colors.border}
                               onChange={handleColorChange}
+                            />
+                            <SyntaxColorPicker
+                              colors={{
+                                ...deriveSyntaxColors(
+                                  draft.general.custom_theme.colors.bg_terminal,
+                                  draft.general.custom_theme.base_mode as "dark" | "light",
+                                ),
+                                ...draft.general.custom_theme.syntax_overrides,
+                              }}
+                              overrides={draft.general.custom_theme.syntax_overrides ?? {}}
+                              onColorChange={handleSyntaxColorChange}
+                              onReset={handleSyntaxReset}
                             />
                             <Button
                               variant="compact"

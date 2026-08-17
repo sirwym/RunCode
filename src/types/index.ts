@@ -220,6 +220,8 @@ export interface CustomThemeConfig {
   editor_alpha: number;
   /** 图片遮罩强度 0~100（百分比整数） */
   mask_opacity: number;
+  /** 用户手动覆盖的语法高亮色（token → 6 位 HEX），未覆盖 token 用自动派生值 */
+  syntax_overrides?: Record<string, string>;
 }
 
 // 编辑器（Monaco）设置

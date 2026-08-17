@@ -55,6 +55,9 @@ pub struct CustomThemeConfig {
     /// 图片遮罩强度 0~100（百分比整数，默认 20）
     #[serde(default = "default_mask_opacity")]
     pub mask_opacity: u8,
+    /// 用户手动覆盖的语法高亮色（token → 6 位 HEX），未覆盖 token 用前端自动派生值
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub syntax_overrides: Option<std::collections::BTreeMap<String, String>>,
 }
 
 fn default_panel_alpha() -> u8 {
@@ -89,6 +92,7 @@ impl Default for CustomThemeConfig {
             panel_alpha: default_panel_alpha(),
             editor_alpha: default_editor_alpha(),
             mask_opacity: default_mask_opacity(),
+            syntax_overrides: None,
         }
     }
 }
@@ -1595,6 +1599,7 @@ mod tests {
             panel_alpha: 75,
             editor_alpha: 88,
             mask_opacity: 30,
+            syntax_overrides: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: CustomThemeConfig = serde_json::from_str(&json).unwrap();
@@ -1619,6 +1624,7 @@ mod tests {
             panel_alpha: 150,
             editor_alpha: 200,
             mask_opacity: 120,
+            syntax_overrides: None,
         });
         save(tmp.path(), &s).unwrap();
 
@@ -1645,6 +1651,7 @@ mod tests {
             panel_alpha: 0,
             editor_alpha: 100,
             mask_opacity: 0,
+            syntax_overrides: None,
         });
         save(tmp.path(), &s).unwrap();
 
@@ -1653,5 +1660,53 @@ mod tests {
         assert_eq!(custom.panel_alpha, 0);
         assert_eq!(custom.editor_alpha, 100);
         assert_eq!(custom.mask_opacity, 0);
+    }
+
+    #[test]
+    fn custom_theme_old_json_without_syntax_overrides_is_none() {
+        // 旧配置（无 syntax_overrides 字段）反序列化 → None（向后兼容）
+        let json = r##"{
+            "image_file": "abc.png",
+            "colors": {
+                "bg": "#1e1e2e",
+                "panel_bg": "#181825",
+                "panel_bg_alt": "#11111b",
+                "text": "#cdd6f4",
+                "text_muted": "#7f849c",
+                "border": "#313244",
+                "primary": "#89b4fa",
+                "primary_hover": "#b4befe",
+                "primary_foreground": "#1e1e2e",
+                "primary_soft": "rgba(137, 180, 250, 0.14)",
+                "primary_border": "rgba(137, 180, 250, 0.40)",
+                "bg_terminal": "#1e1e2e"
+            },
+            "base_mode": "dark",
+            "panel_alpha": 82,
+            "editor_alpha": 92,
+            "mask_opacity": 20
+        }"##;
+        let config: CustomThemeConfig = serde_json::from_str(json).unwrap();
+        assert!(config.syntax_overrides.is_none());
+    }
+
+    #[test]
+    fn custom_theme_syntax_overrides_roundtrip() {
+        // 含 syntax_overrides 的 round-trip（serialize → deserialize）值保持
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert("keyword".to_string(), "#ff0000".to_string());
+        overrides.insert("comment".to_string(), "#00ff00".to_string());
+        let config = CustomThemeConfig {
+            syntax_overrides: Some(overrides.clone()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: CustomThemeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.syntax_overrides, Some(overrides));
+    }
+
+    #[test]
+    fn custom_theme_default_syntax_overrides_is_none() {
+        assert!(CustomThemeConfig::default().syntax_overrides.is_none());
     }
 }

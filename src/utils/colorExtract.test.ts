@@ -8,6 +8,7 @@ import {
   kMeans,
   extractThemeColors,
   rederiveColors,
+  deriveSyntaxColors,
   isVideoFile,
 } from "./colorExtract";
 
@@ -344,6 +345,80 @@ describe("colorExtract", () => {
     it("预览标记 __preview__.mp4 返回 true", () => {
       expect(isVideoFile("__preview__.mp4")).toBe(true);
       expect(isVideoFile("__preview__.png")).toBe(false);
+    });
+  });
+
+  describe("deriveSyntaxColors", () => {
+    /** 计算颜色与背景的实际对比度 */
+    function contrastAgainst(hex: string, bgHex: string): number {
+      const [r1, g1, b1] = hexToRgb(hex);
+      const [r2, g2, b2] = hexToRgb(bgHex);
+      return contrastRatio(
+        relativeLuminance(r1, g1, b1),
+        relativeLuminance(r2, g2, b2),
+      );
+    }
+
+    // 性质测试：5 个 ≥4.5 token 全达标，comment ≥ 3.0
+    it("深色背景下 5 个 token 对比度 ≥ 4.5，comment ≥ 3.0", () => {
+      for (const bg of ["#1e1e2e", "#0a0a0a"]) {
+        const s = deriveSyntaxColors(bg, "dark");
+        for (const token of ["keyword", "type", "string", "number", "preprocessor"] as const) {
+          expect(contrastAgainst(s[token], bg), `${token} vs ${bg}`).toBeGreaterThanOrEqual(4.5);
+        }
+        expect(contrastAgainst(s.comment, bg), `comment vs ${bg}`).toBeGreaterThanOrEqual(3.0);
+      }
+    });
+
+    it("浅色背景下 5 个 token 对比度 ≥ 4.5，comment ≥ 3.0", () => {
+      for (const bg of ["#f3f7f8", "#ffffff"]) {
+        const s = deriveSyntaxColors(bg, "light");
+        for (const token of ["keyword", "type", "string", "number", "preprocessor"] as const) {
+          expect(contrastAgainst(s[token], bg), `${token} vs ${bg}`).toBeGreaterThanOrEqual(4.5);
+        }
+        expect(contrastAgainst(s.comment, bg), `comment vs ${bg}`).toBeGreaterThanOrEqual(3.0);
+      }
+    });
+
+    it("锚点本已达标时保持原值（不做无谓调整）", () => {
+      // dark 锚点 vs #1e1e2e 对比度均 ≥ 4.5（comment ≥ 3.0）
+      const s = deriveSyntaxColors("#1e1e2e", "dark");
+      expect(s.keyword).toBe("#569cd6");
+      expect(s.type).toBe("#4ec9b0");
+      expect(s.string).toBe("#ce9178");
+      expect(s.number).toBe("#b5cea8");
+      expect(s.comment).toBe("#6a9955");
+      expect(s.preprocessor).toBe("#c586c0");
+    });
+
+    it("确定性：同输入两次调用结果全等", () => {
+      const a = deriveSyntaxColors("#123456", "dark");
+      const b = deriveSyntaxColors("#123456", "dark");
+      expect(a).toEqual(b);
+    });
+
+    it("中灰背景不抛错，返回候选中对比度更高者（best-effort）", () => {
+      // L≈0.5 时 4.5 数学上不可达，dark 模式应回退到白色极值
+      const s = deriveSyntaxColors("#808080", "dark");
+      expect(s.keyword).toBe("#ffffff");
+      // 白色 vs 中灰 ≈ 1.9，是不抛错前提下可达的最大对比度量级
+      expect(contrastAgainst(s.keyword, "#808080")).toBeGreaterThan(1.8);
+    });
+
+    it("输出全部为 6 位小写 HEX", () => {
+      const cases: Array<[string, "dark" | "light"]> = [
+        ["#1e1e2e", "dark"],
+        ["#808080", "dark"],
+        ["#ffffff", "light"],
+        ["#f3f7f8", "light"],
+      ];
+      const HEX_RE = /^#[0-9a-f]{6}$/;
+      for (const [bg, mode] of cases) {
+        const s = deriveSyntaxColors(bg, mode);
+        for (const value of Object.values(s)) {
+          expect(value, `${value} vs ${bg}/${mode}`).toMatch(HEX_RE);
+        }
+      }
     });
   });
 });

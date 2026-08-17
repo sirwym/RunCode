@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "../hooks/useI18n";
-import { hexToRgb } from "../utils/colorExtract";
-import type { ExtractedColors } from "../utils/colorExtract";
+import { hexToRgb, deriveSyntaxColors } from "../utils/colorExtract";
+import type { ExtractedColors, SyntaxColors } from "../utils/colorExtract";
 
 interface CustomThemePreviewProps {
   colors: ExtractedColors;
@@ -14,11 +14,12 @@ interface CustomThemePreviewProps {
   initialEditorAlpha: number;
   /** 初始图片遮罩强度 0~100 */
   initialMaskOpacity: number;
-  /** 应用主题时回传 3 个滑块值 */
+  /** 应用主题时回传 3 个滑块值 + 语法色覆盖 */
   onApply: (params: {
     panelAlpha: number;
     editorAlpha: number;
     maskOpacity: number;
+    syntaxOverrides: Record<string, string>;
   }) => void;
   /** 滑块实时变化时回传当前值（用于驱动主界面预览，不触发保存） */
   onSliderChange?: (params: {
@@ -34,6 +35,10 @@ interface CustomThemePreviewProps {
     border: string;
     primary: string;
   }) => void;
+  /** 初始语法色手动覆盖（重导入/再次预览时保留） */
+  initialSyntaxOverrides: Record<string, string>;
+  /** 语法色覆盖实时变化时回传（用于驱动主界面预览，不触发保存） */
+  onSyntaxChange?: (overrides: Record<string, string>) => void;
   onCancel: () => void;
 }
 
@@ -226,6 +231,78 @@ export function CustomThemeColorPicker({
   );
 }
 
+// 纯受控语法色板组：可被 CustomThemePreview（状态 B）和 SettingsPanel 状态 C 复用
+// colors 为生效色（overrides 已合并派生值），overrides 仅用于标记哪些 token 已自定义
+export interface SyntaxColorPickerProps {
+  /** 生效语法色（overrides 已合并派生值），用于显示 */
+  colors: SyntaxColors;
+  /** 当前手动覆盖集（决定哪些 swatch 标记"已自定义"） */
+  overrides: Record<string, string>;
+  onColorChange: (token: keyof SyntaxColors, color: string) => void;
+  /** 整组重置（清空全部 overrides，回到自动派生） */
+  onReset: () => void;
+}
+
+export function SyntaxColorPicker({
+  colors,
+  overrides,
+  onColorChange,
+  onReset,
+}: SyntaxColorPickerProps) {
+  const t = useI18n((s) => s.t);
+  const mark = (label: string, token: keyof SyntaxColors) =>
+    overrides[token] ? `${label}*` : label;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+          {t("settings.syntaxHighlightGroup")}
+        </span>
+        <Button
+          variant="compact"
+          disabled={Object.keys(overrides).length === 0}
+          onClick={onReset}
+        >
+          {t("settings.resetSyntaxColors")}
+        </Button>
+      </div>
+      <div className="flex gap-2 flex-wrap">
+        <ColorSwatch
+          label={mark(t("settings.syntaxKeyword"), "keyword")}
+          color={colors.keyword}
+          onChange={(v) => onColorChange("keyword", v)}
+        />
+        <ColorSwatch
+          label={mark(t("settings.syntaxType"), "type")}
+          color={colors.type}
+          onChange={(v) => onColorChange("type", v)}
+        />
+        <ColorSwatch
+          label={mark(t("settings.syntaxString"), "string")}
+          color={colors.string}
+          onChange={(v) => onColorChange("string", v)}
+        />
+        <ColorSwatch
+          label={mark(t("settings.syntaxNumber"), "number")}
+          color={colors.number}
+          onChange={(v) => onColorChange("number", v)}
+        />
+        <ColorSwatch
+          label={mark(t("settings.syntaxComment"), "comment")}
+          color={colors.comment}
+          onChange={(v) => onColorChange("comment", v)}
+        />
+        <ColorSwatch
+          label={mark(t("settings.syntaxPreprocessor"), "preprocessor")}
+          color={colors.preprocessor}
+          onChange={(v) => onColorChange("preprocessor", v)}
+        />
+      </div>
+      <p className="settings-hint">{t("settings.syntaxAutoHint")}</p>
+    </div>
+  );
+}
+
 function CustomThemePreview({
   colors,
   imageUrl,
@@ -235,12 +312,21 @@ function CustomThemePreview({
   onApply,
   onSliderChange,
   onColorChange,
+  initialSyntaxOverrides,
+  onSyntaxChange,
   onCancel,
 }: CustomThemePreviewProps) {
   const t = useI18n((s) => s.t);
   const [panelAlpha, setPanelAlpha] = useState(initialPanelAlpha);
   const [editorAlpha, setEditorAlpha] = useState(initialEditorAlpha);
   const [maskOpacity, setMaskOpacity] = useState(initialMaskOpacity);
+  const [syntaxOverrides, setSyntaxOverrides] = useState(initialSyntaxOverrides);
+
+  // 生效语法色 = 自动派生 + 手动覆盖（与 Editor.tsx buildCustomMonacoRules 合成逻辑一致）
+  const effSyntax: SyntaxColors = {
+    ...deriveSyntaxColors(colors.bg_terminal, colors.baseMode),
+    ...syntaxOverrides,
+  };
 
   // 滑块变化时同步内部 state + 通知父组件更新主题预览
   const handleSliderChange = (p: {
@@ -252,6 +338,19 @@ function CustomThemePreview({
     setEditorAlpha(p.editorAlpha);
     setMaskOpacity(p.maskOpacity);
     onSliderChange?.(p);
+  };
+
+  // 语法色变化：同步内部 state + 通知父组件更新主编辑器预览
+  const handleSyntaxColorChange = (token: keyof SyntaxColors, color: string) => {
+    const next = { ...syntaxOverrides, [token]: color };
+    setSyntaxOverrides(next);
+    onSyntaxChange?.(next);
+  };
+
+  // 整组重置：清空全部覆盖，回到自动派生
+  const handleSyntaxReset = () => {
+    setSyntaxOverrides({});
+    onSyntaxChange?.({});
   };
 
   // 模拟面板/编辑器背景色（panel 用 panel_bg，editor 用 bg_terminal，与 App.tsx 注入逻辑一致）
@@ -299,8 +398,20 @@ function CustomThemePreview({
           <div className="text-[10px] font-mono" style={{ color: colors.text_muted }}>
             {t("settings.editor")}
           </div>
-          <div className="text-xs font-mono mt-0.5" style={{ color: colors.text }}>
-            #include &lt;iostream&gt;
+          {/* 示例代码用生效语法色着色（派生 + 覆盖），实时反映语法色调整 */}
+          <div className="text-xs font-mono mt-0.5 leading-snug" style={{ color: colors.text }}>
+            <div>
+              <span style={{ color: effSyntax.preprocessor }}>#include</span>{" "}
+              <span style={{ color: effSyntax.string }}>&lt;iostream&gt;</span>
+            </div>
+            <div>
+              <span style={{ color: effSyntax.keyword }}>int</span> main() {"{"}
+            </div>
+            <div>
+              {"  "}
+              <span style={{ color: effSyntax.keyword }}>return</span>{" "}
+              <span style={{ color: effSyntax.number }}>0</span>;
+            </div>
           </div>
         </div>
 
@@ -351,12 +462,20 @@ function CustomThemePreview({
         onChange={(c) => onColorChange?.(c)}
       />
 
+      {/* 语法高亮色板 */}
+      <SyntaxColorPicker
+        colors={effSyntax}
+        overrides={syntaxOverrides}
+        onColorChange={handleSyntaxColorChange}
+        onReset={handleSyntaxReset}
+      />
+
       {/* 操作按钮 */}
       <div className="flex gap-2">
         <Button
           variant="default"
           onClick={() =>
-            onApply({ panelAlpha, editorAlpha, maskOpacity })
+            onApply({ panelAlpha, editorAlpha, maskOpacity, syntaxOverrides })
           }
         >
           {t("settings.applyTheme")}
