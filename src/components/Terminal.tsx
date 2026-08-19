@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
-import type { ITheme as XTermTheme } from "@xterm/xterm";
+import type { ITheme as XTermTheme, ITerminalOptions } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -175,6 +175,22 @@ export function resolveTerminalKeyAction(
   return "none";
 }
 
+// 构建 PTY 退出时写入终端的控制序列（纯函数，便于单测）。
+// - killed_by === "signal"：前置红色信号终止提示行
+// - 末尾统一隐藏光标（\x1b[?25l）：程序结束后（正常退出 / 手动停止 / 输出超限）
+//   光标无存在意义，避免学员误以为仍可输入。此处的 ?25l 与 runId effect
+//   （runId 变 null 时）的双写互为兜底——本序列走 buffer/rAF 延迟，可能被
+//   cleanup 取消；runId effect 的直写才是可靠路径。下次运行就绪时由
+//   autoFocusSeq effect 写 \x1b[?25h 恢复（RIS 不重置 isCursorHidden）。
+export function buildPtyExitSequence(killedBy: string | null, signalTerminatedText: string): string {
+  let seq = "";
+  if (killedBy === "signal") {
+    seq += `\r\n\x1b[31m${signalTerminatedText}\x1b[0m\r\n`;
+  }
+  seq += "\x1b[?25l";
+  return seq;
+}
+
 interface TerminalProps {
   runId: string | null; // PTY 会话 ID
   onExit: (exitCode: number | null, killedBy: string | null, maxRssKb: number | null) => void;
@@ -191,6 +207,10 @@ interface TerminalProps {
   compileError?: string | null;
   onFocusChange?: (focused: boolean) => void;
   visible?: boolean;
+  // PTY 就绪信号（来自 useRunManager.ptyReadySeq，单调递增）。
+  // 变化时（编译完成、PTY 建立）自动聚焦终端，光标立即闪烁提示可输入。
+  // 0 表示尚未就绪（含应用启动首次渲染），不聚焦。
+  autoFocusSeq?: number;
 }
 
 // 根据 theme + customColors + panelAlpha + baseMode 选择生效的 xterm 主题
@@ -207,12 +227,33 @@ function resolveXtermTheme(
   return XTERM_DARK_THEME;
 }
 
+// 构建 xterm 初始化选项（纯函数，便于单测）
+export function buildXtermOptions(
+  fontSize: number | undefined,
+  theme: XTermTheme,
+): ITerminalOptions {
+  return {
+    fontFamily:
+      "'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', Menlo, 'Cascadia Code', monospace",
+    fontSize: fontSize ?? 13,
+    cursorBlink: true,
+    // 活跃光标为 2px 竖条（默认 1px 远距离不易察觉，教学场景加宽），
+    // 失焦时降级为方块以便区分聚焦状态
+    cursorStyle: "bar",
+    cursorWidth: 2,
+    cursorInactiveStyle: "block",
+    convertEol: false,
+    scrollback: 5000,
+    theme,
+  };
+}
+
 // xterm.js 终端组件。
 // - runId 非空时监听 pty_output / pty_exit 事件
 // - 用户输入通过 onData → write_pty_stdin
 // - 容器大小变化通过 ResizeObserver → resize_pty
 // - fontSize 仅在初始化时读取，运行中改设置需重启应用生效
-function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, baseMode, compileError, onFocusChange, visible = true }: TerminalProps) {
+function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, baseMode, compileError, onFocusChange, visible = true, autoFocusSeq }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -240,6 +281,9 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
   // 保存最新的 runId，供 ResizeObserver 在拖拽分屏后同步 resize_pty
   const runIdRef = useRef(runId);
   runIdRef.current = runId;
+  // 保存最新的 visible，供 autoFocusSeq effect 读取（避免 effect 依赖 visible 导致多余触发）
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
 
   // 右键菜单状态
   const t = useI18n((s) => s.t);
@@ -321,18 +365,12 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const term = new XTerm({
-      fontFamily:
-        "'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', Menlo, 'Cascadia Code', monospace",
-      fontSize: fontSizeRef.current ?? 13,
-      cursorBlink: true,
-      // 活跃光标为细竖条（接近编辑器光标），失焦时降级为方块以便区分聚焦状态
-      cursorStyle: "bar",
-      cursorInactiveStyle: "block",
-      convertEol: false,
-      scrollback: 5000,
-      theme: resolveXtermTheme(themeRef.current, customColorsRef.current, panelAlphaRef.current, baseModeRef.current),
-    });
+    const term = new XTerm(
+      buildXtermOptions(
+        fontSizeRef.current,
+        resolveXtermTheme(themeRef.current, customColorsRef.current, panelAlphaRef.current, baseModeRef.current),
+      ),
+    );
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(containerRef.current);
@@ -423,6 +461,22 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     }
   }, [fontSize]);
 
+  // autoFocusSeq 变化（编译完成、PTY 就绪）时聚焦终端：
+  // 光标立即闪烁，提示学生"程序已就绪，可以输入"（方案 B）。
+  // 编译期间不聚焦——此时 PTY 未建立，输入会静默丢失。
+  useEffect(() => {
+    if (!autoFocusSeq) return;
+    const term = termRef.current;
+    if (!term) return;
+    // 恢复光标可见：上一程序退出时被 buildPtyExitSequence 的 ?25l 隐藏，
+    // 且 term.reset()（RIS）不重置 isCursorHidden，必须显式恢复。
+    // 无论终端 tab 是否可见都写入（光标可见性是状态而非像素），
+    // 否则编译期间切走 tab 的会话切回后光标永久消失。
+    term.write("\x1b[?25h");
+    // 终端 tab 不可见时（编译期间用户手动切走面板 tab）不抢焦点
+    if (visibleRef.current) term.focus();
+  }, [autoFocusSeq]);
+
   // theme / customColors / panelAlpha / baseMode 变化时运行时更新终端主题（无需重建终端）
   // 用 JSON.stringify(customColors) 作为依赖键，避免对象引用变化导致无限循环
   const customColorsKey = customColors ? JSON.stringify(customColors) : "";
@@ -457,7 +511,19 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
   // runId 变化时绑定/解绑事件 + onData
   useEffect(() => {
     const term = termRef.current;
-    if (!term || !runId) return;
+    if (!term) return;
+
+    if (!runId) {
+      // 会话结束（正常退出 / 停止 / 编译失败 → store ptyRunId → null）时隐藏光标。
+      // 不能依赖 pty_exit 监听器经 buffer/rAF 写入 ?25l：
+      // - 退出路径：onExit 同步触发 ptyRunId → null → 本 effect cleanup
+      //   cancelAnimationFrame，pending 的 ?25l 会被整体丢弃；
+      // - 停止路径：stopInteractive 先清空 ptyRunId 解绑监听器，pty_exit 根本收不到。
+      // 在此统一写入可覆盖所有路径；?25l 是纯模式切换，不会清除用户选区，
+      // 且 term 实例独立于本 effect 存活。下次会话就绪由 autoFocusSeq 写 ?25h 恢复。
+      term.write("\x1b[?25l");
+      return;
+    }
 
     // 清空终端（新会话）
     term.reset();
@@ -516,10 +582,8 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
           // 避免 pty_exit 延迟到达时 term.write() 清除用户选区。
           // Windows ConPTY 子进程退出后不返回 EOF，drain_reader_with_timeout
           // 有 500ms 超时，期间用户可能已开始选中输出文本。
-          if (e.payload.killed_by === "signal") {
-            buffer += `\r\n\x1b[31m${t("killed.signalTerminated")}\x1b[0m\r\n`;
-          }
-          buffer += "\x1b[?25h";
+          // 退出序列含 ?25l 隐藏光标（所有退出路径：正常 / 停止 / 超限 / 信号）。
+          buffer += buildPtyExitSequence(e.payload.killed_by, t("killed.signalTerminated"));
           // 确保有 flush 被调度（可能已有 rAF 在等待）
           if (rafId === null) {
             rafId = requestAnimationFrame(flush);

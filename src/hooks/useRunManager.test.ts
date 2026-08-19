@@ -702,3 +702,93 @@ describe("useRunManager compileRun/runTests 编译失败 compileError 接入", (
     expect(s.resultsByTab["tab-a"]?.compileError).toBeNull();
   });
 });
+
+// ============ PTY 就绪聚焦信号 ptyReadySeq 测试 ============
+// 验证方案 B：startInteractive 编译成功、PTY 建立时发出单调递增信号，
+// Terminal 监听其变化自动聚焦终端（光标闪烁提示可输入）。
+describe("useRunManager PTY 就绪聚焦信号 ptyReadySeq", () => {
+  beforeEach(() => {
+    useRunManager.setState({
+      activeRunId: null,
+      kind: null,
+      status: "idle",
+      runResult: null,
+      testResult: null,
+      error: null,
+      testProgress: null,
+      ptyRunId: null,
+      ptyExitInfo: null,
+      ptyStartTime: null,
+      ptyReadySeq: 0,
+      compileError: null,
+      activeTabId: null,
+      resultsByTab: {},
+    });
+    invokeMock.mockReset();
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => {});
+  });
+
+  it("startInteractive 成功 → ptyReadySeq +1，连续两次运行递增到 2", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({
+      status: "success",
+      run_id: "pty-1",
+      compile_stdout: "",
+      compile_stderr: "",
+    });
+    await useRunManager.getState().startInteractive("code");
+    expect(useRunManager.getState().ptyReadySeq).toBe(1);
+
+    // 结束第一次会话（activeRunId 清空），否则第二次 startInteractive 会被互斥守卫拦截
+    useRunManager.getState().onPtyExit({ exitCode: 0, killedBy: null }, 1024);
+
+    invokeMock.mockResolvedValueOnce({
+      status: "success",
+      run_id: "pty-2",
+      compile_stdout: "",
+      compile_stderr: "",
+    });
+    await useRunManager.getState().startInteractive("code");
+    expect(useRunManager.getState().ptyReadySeq).toBe(2);
+  });
+
+  it("startInteractive 编译失败 → ptyReadySeq 不变（不聚焦，回编辑器改代码）", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({
+      status: "compile_failed",
+      run_id: "x",
+      stderr: "error: foo",
+    });
+    await useRunManager.getState().startInteractive("code");
+    expect(useRunManager.getState().ptyReadySeq).toBe(0);
+  });
+
+  it("编译期间被 stop → invoke 返回 success 也不递增（守卫丢弃）", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    let resolveRun: (v: StartPtyResult) => void = () => {};
+    invokeMock.mockReturnValueOnce(new Promise<StartPtyResult>((res) => { resolveRun = res; }));
+
+    const runPromise = useRunManager.getState().startInteractive("code");
+    const runId = useRunManager.getState().activeRunId;
+    expect(runId).not.toBeNull();
+
+    // 模拟 stopInteractive 把 activeRunId 设为 null
+    useRunManager.setState({
+      activeRunId: null, status: "idle", kind: null,
+      ptyRunId: null,
+      ptyStartTime: null,
+    });
+
+    // 旧请求返回 success（PTY 已建立）
+    invokeMock.mockResolvedValueOnce(true); // stop_pty_run
+    resolveRun({ status: "success", run_id: runId!, compile_stdout: "", compile_stderr: "" });
+    await runPromise;
+
+    // 就绪信号不递增
+    expect(useRunManager.getState().ptyReadySeq).toBe(0);
+    // 且调用了 stop_pty_run 清理 PTY
+    const stopCall = invokeMock.mock.calls.find((c) => c[0] === "stop_pty_run");
+    expect(stopCall).toBeDefined();
+  });
+});

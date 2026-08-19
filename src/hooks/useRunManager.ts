@@ -80,6 +80,11 @@ interface RunManagerState {
   /** PTY 运行开始时间戳（毫秒），用于计算 durationMs */
   ptyStartTime: number | null;
 
+  /** PTY 就绪信号（单调递增计数器）：startInteractive 编译成功、PTY 建立后 +1。
+   *  Terminal 监听其变化自动聚焦，光标立即闪烁提示"可以输入了"。
+   *  仅递增、从不重置（reset/stop/exit 均不动它），避免跨运行取值碰撞。 */
+  ptyReadySeq: number;
+
   // 编译失败时的 stderr（PTY 交互模式下，编译失败不创建 PTY 会话，
   // 直接把 stderr 存这里供 Terminal 显示 + Editor 解析错误行）
   compileError: string | null;
@@ -117,6 +122,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   ptyRunId: null,
   ptyExitInfo: null,
   ptyStartTime: null,
+  ptyReadySeq: 0,
   compileError: null,
   activeTabId: null,
   resultsByTab: {},
@@ -369,6 +375,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
           return {
             activeRunId: result.run_id,
             ptyRunId: result.run_id,
+            // 编译成功、PTY 建立：发出就绪信号，Terminal 自动聚焦（方案 B）
+            ptyReadySeq: s.ptyReadySeq + 1,
             resultsByTab,
           };
         });

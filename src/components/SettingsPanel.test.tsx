@@ -481,6 +481,42 @@ describe("SettingsPanel 测试设置小节（编程语言 tab）", () => {
   });
 });
 
+describe("SettingsPanel 编辑器 tab 字号上限", () => {
+  beforeAll(() => {
+    if (!window.matchMedia) {
+      window.matchMedia = ((q: string) => ({
+        matches: false,
+        media: q,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      })) as unknown as typeof window.matchMedia;
+    }
+  });
+
+  beforeEach(() => {
+    resetStores(makeSettings());
+  });
+
+  it("编辑器字号与终端字号输入框上限均为 48，下限保持 8", async () => {
+    const user = userEvent.setup();
+    render(<SettingsPanel open={true} onClose={() => {}} />);
+    await user.click(screen.getByRole("tab", { name: zh.settings.editor }));
+
+    const editorInput = document.getElementById("set-editor-font-size") as HTMLInputElement;
+    const termInput = document.getElementById("set-term-font-size") as HTMLInputElement;
+    expect(editorInput).not.toBeNull();
+    expect(termInput).not.toBeNull();
+    expect(editorInput.max).toBe("48");
+    expect(termInput.max).toBe("48");
+    expect(editorInput.min).toBe("8");
+    expect(termInput.min).toBe("8");
+  });
+});
+
 describe("SettingsPanel 自定义图片主题", () => {
   beforeAll(() => {
     if (!window.matchMedia) {

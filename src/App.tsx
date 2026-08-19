@@ -167,6 +167,7 @@ function App() {
   const runTests = useRunManager((s) => s.runTests);
   const onPtyExit = useRunManager((s) => s.onPtyExit);
   const ptyRunId = useRunManager((s) => s.ptyRunId);
+  const ptyReadySeq = useRunManager((s) => s.ptyReadySeq);
   const compileError = useRunManager((s) => s.compileError);
   const strict = useTestOptions((s) => s.strict);
 
@@ -1129,6 +1130,7 @@ function App() {
                 compileError={compileError}
                 onFocusChange={(focused) => { terminalFocusedRef.current = focused; }}
                 visible={tab === "terminal"}
+                autoFocusSeq={ptyReadySeq}
               />
             </section>
             <section style={{ display: tab === "flowchart" ? undefined : "none" }}>

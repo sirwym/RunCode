@@ -967,7 +967,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       id="set-editor-font-size"
                       type="number"
                       min={8}
-                      max={32}
+                      max={48}
                       value={draft.editor.font_size}
                       onChange={(e) =>
                         updateEditor("font_size", Number(e.target.value))
@@ -982,7 +982,7 @@ function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       id="set-term-font-size"
                       type="number"
                       min={8}
-                      max={32}
+                      max={48}
                       value={draft.editor.terminal_font_size}
                       onChange={(e) =>
                         updateEditor(

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { XTERM_DARK_THEME, XTERM_LIGHT_THEME, buildCustomXtermTheme, shouldDeferFlush, normalizeEol, resolveTerminalKeyAction } from "./Terminal";
+import { XTERM_DARK_THEME, XTERM_LIGHT_THEME, buildCustomXtermTheme, buildXtermOptions, buildPtyExitSequence, shouldDeferFlush, normalizeEol, resolveTerminalKeyAction } from "./Terminal";
 import type { CustomThemeColors } from "../types";
 
 // 验证 xterm 主题与品牌令牌一致
@@ -210,6 +210,67 @@ describe("buildCustomXtermTheme baseMode ANSI 预设", () => {
   });
 });
 
+// buildXtermOptions 构建 xterm 初始化选项（纯函数）
+// cursorWidth: 2 为教学场景加宽（默认 1px 远距离不可见），仅 bar 光标生效
+describe("buildXtermOptions xterm 初始化选项", () => {
+  it("光标为 2px 宽 bar，闪烁，失焦降级 block", () => {
+    const opts = buildXtermOptions(14, XTERM_DARK_THEME);
+    expect(opts.cursorStyle).toBe("bar");
+    expect(opts.cursorWidth).toBe(2);
+    expect(opts.cursorBlink).toBe(true);
+    expect(opts.cursorInactiveStyle).toBe("block");
+  });
+
+  it("fontSize 未传时默认 13", () => {
+    expect(buildXtermOptions(undefined, XTERM_DARK_THEME).fontSize).toBe(13);
+  });
+
+  it("fontSize 正常透传", () => {
+    expect(buildXtermOptions(20, XTERM_DARK_THEME).fontSize).toBe(20);
+  });
+
+  it("字体为 JetBrains Mono 栈", () => {
+    expect(buildXtermOptions(14, XTERM_DARK_THEME).fontFamily).toContain("JetBrains Mono");
+  });
+
+  it("主题透传（dark / light 均可）", () => {
+    expect(buildXtermOptions(14, XTERM_DARK_THEME).theme).toBe(XTERM_DARK_THEME);
+    expect(buildXtermOptions(14, XTERM_LIGHT_THEME).theme).toBe(XTERM_LIGHT_THEME);
+  });
+});
+
+// buildPtyExitSequence PTY 退出序列（纯函数）
+// 退出时光标必须隐藏（?25l）：光标在 = 能输入，光标不在 = 程序结束，
+// 所有退出路径（正常 / 停止 / 超限 / 信号）统一走此函数
+describe("buildPtyExitSequence PTY 退出序列", () => {
+  it("正常退出（killed_by: null）→ 仅隐藏光标序列", () => {
+    expect(buildPtyExitSequence(null, "已终止")).toBe("\x1b[?25l");
+  });
+
+  it("手动停止（cancelled）→ 仅隐藏光标序列（无提示行）", () => {
+    expect(buildPtyExitSequence("cancelled", "已终止")).toBe("\x1b[?25l");
+  });
+
+  it("输出超限（output_limit）→ 仅隐藏光标序列", () => {
+    expect(buildPtyExitSequence("output_limit", "已终止")).toBe("\x1b[?25l");
+  });
+
+  it("信号终止（signal）→ 红色提示行 + 隐藏光标序列", () => {
+    expect(buildPtyExitSequence("signal", "被信号终止")).toBe(
+      "\r\n\x1b[31m被信号终止\x1b[0m\r\n\x1b[?25l",
+    );
+  });
+
+  it("所有路径均以 ?25l 结尾且不含 ?25h（退出后光标不显示）", () => {
+    for (const killedBy of [null, "cancelled", "output_limit", "signal"]) {
+      const seq = buildPtyExitSequence(killedBy, "x");
+      expect(seq.endsWith("\x1b[?25l")).toBe(true);
+      expect(seq).not.toContain("\x1b[?25h");
+    }
+  });
+});
+
+// shouldDeferFlush 选区保活决策
 describe("shouldDeferFlush 选区保活决策", () => {
   it("有选区且缓冲未超限时返回 true", () => {
     expect(shouldDeferFlush(true, 1024)).toBe(true);
