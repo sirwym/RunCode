@@ -8,6 +8,7 @@ use serde::Serialize;
 use tree_sitter::Node;
 
 use super::parse_cpp;
+use crate::error::AppError;
 
 /// CFG 节点元数据（前端用于点击跳转映射）
 #[derive(Debug, Serialize, Clone)]
@@ -638,8 +639,10 @@ fn is_statement(node: &Node) -> bool {
 /// 生成 C++ 函数控制流图
 /// 输入：C++ 源码字符串
 /// 输出：CfgResult（Mermaid 文本 + 节点元数据 + 警告）
-pub fn generate_cfg(code: &str) -> Result<CfgResult, String> {
-    let tree = parse_cpp(code).ok_or("代码解析失败")?;
+pub fn generate_cfg(code: &str) -> Result<CfgResult, AppError> {
+    let tree = parse_cpp(code).ok_or(AppError::Other {
+        detail: "代码解析失败".into(),
+    })?;
     let source = code.as_bytes().to_vec();
     let mut builder = CfgBuilder::new(source);
 
@@ -647,7 +650,7 @@ pub fn generate_cfg(code: &str) -> Result<CfgResult, String> {
 
     let func = builder
         .find_target_function(&tree.root_node())
-        .ok_or("未找到函数定义")?;
+        .ok_or(AppError::CfgNoFunction)?;
 
     let func_name = func
         .child_by_field_name("declarator")
@@ -656,7 +659,9 @@ pub fn generate_cfg(code: &str) -> Result<CfgResult, String> {
 
     let body = func
         .child_by_field_name("body")
-        .ok_or("函数无函数体")?;
+        .ok_or(AppError::Other {
+            detail: "函数无函数体".into(),
+        })?;
 
     let entry_line = func.start_position().row + 1;
     let exit_line = func.end_position().row + 1;
@@ -773,7 +778,10 @@ mod tests {
     fn test_no_function() {
         let code = "int x = 0;";
         let result = generate_cfg(code);
-        assert!(result.is_err());
+        match result {
+            Err(AppError::CfgNoFunction) => {}
+            other => panic!("预期 CfgNoFunction，实际: {other:?}"),
+        }
     }
 
     #[test]

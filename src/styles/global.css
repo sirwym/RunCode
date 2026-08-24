@@ -1239,6 +1239,50 @@ body::before {
   padding: var(--space-xs) 0;
 }
 
+/* ============== 转义诊断（judge expected/actual） ============== */
+.testcase-judge-details {
+  width: 100%;
+  margin-top: var(--space-sm);
+}
+
+.testcase-judge-details summary {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: var(--space-xs) 0;
+}
+
+.judge-esc-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.judge-esc-label {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.judge-esc-pre {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.judge-esc-legend {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: var(--space-xs) 0;
+}
+
 /* ============== diff Modal ============== */
 /* 基于视口的最大宽高，保证 800×600 最小窗口不溢出 */
 .diff-dialog-content {

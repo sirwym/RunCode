@@ -25,6 +25,8 @@ const TRANSLATION_RULES: TranslationRule[] = [
   { pattern: /was not declared in this scope/, translation: "标识符未在当前作用域内声明（变量/函数未定义或作用域不对）" },
   { pattern: /no matching function for call/, translation: "没有匹配的函数重载（参数类型或数量不匹配）" },
   { pattern: /invalid conversion from/, translation: "类型转换错误（隐式转换不合法，检查变量类型）" },
+  { pattern: /cannot assign to variable .* with const-qualified type/, translation: "不能给 const 常量赋值（const 变量一经初始化就不能修改）" },
+  { pattern: /assignment of read-only variable/, translation: "不能给 const 常量赋值（const 变量一经初始化就不能修改）" },
   { pattern: /expected primary-expression/, translation: "缺少表达式（可能是括号不匹配或运算符误用）" },
   { pattern: /expected expression/, translation: "缺少表达式（可能是括号不匹配、运算符误用或中文符号干扰）" },
   { pattern: /redefinition of/, translation: "重复定义（同一名称定义了多次）" },

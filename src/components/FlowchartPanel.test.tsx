@@ -105,8 +105,8 @@ describe("formatCfgError", () => {
     return s as string;
   };
 
-  it("未找到函数定义 → flowchartNoFunction", () => {
-    const err: AppErrorPayload = { code: "other", params: { detail: "未找到函数定义" } };
+  it("未找到函数定义（cfg_no_function 错误码）→ flowchartNoFunction", () => {
+    const err: AppErrorPayload = { code: "cfg_no_function" };
     expect(formatCfgError(err, t)).toBe(zh.panel.flowchartNoFunction);
   });
 
@@ -233,7 +233,7 @@ describe("FlowchartPanel 组件", () => {
 
   it("invoke 失败返回未找到函数定义时显示对应文案", async () => {
     const mockInvoke = invoke as ReturnType<typeof vi.fn>;
-    mockInvoke.mockRejectedValue({ code: "other", params: { detail: "未找到函数定义" } });
+    mockInvoke.mockRejectedValue({ code: "cfg_no_function" });
 
     render(
       <FlowchartPanel
@@ -317,6 +317,61 @@ describe("FlowchartPanel 组件", () => {
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("代码不变时切换面板可见性不重复生成", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    mockInvoke.mockResolvedValue(makeCfgResult());
+
+    const props = {
+      code: "int main() { return 0; }",
+      onNodeClick: () => {},
+      theme: "dark" as const,
+    };
+    const { rerender } = render(
+      <FlowchartPanel {...props} visible={true} />,
+    );
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    // 切走再切回，代码未变 → 不重新生成
+    rerender(<FlowchartPanel {...props} visible={false} />);
+    rerender(<FlowchartPanel {...props} visible={true} />);
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("代码变化后切回面板自动重新生成", async () => {
+    const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+    mockInvoke.mockResolvedValue(makeCfgResult());
+
+    const props = {
+      code: "int main() { return 0; }",
+      onNodeClick: () => {},
+      theme: "dark" as const,
+    };
+    const { rerender } = render(
+      <FlowchartPanel {...props} visible={true} />,
+    );
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+
+    // 修改代码后切走再切回 → 自动重新生成
+    const propsB = { ...props, code: "int main() { if (1) {} return 0; }" };
+    rerender(<FlowchartPanel {...propsB} visible={false} />);
+    rerender(<FlowchartPanel {...propsB} visible={true} />);
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+    });
+    expect(mockInvoke).toHaveBeenLastCalledWith("generate_cfg", {
+      code: "int main() { if (1) {} return 0; }",
     });
   });
 

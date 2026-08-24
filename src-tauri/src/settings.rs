@@ -548,7 +548,7 @@ fn settings_path(base: &Path) -> PathBuf {
 /// 2. v3 失败时按 schema_version 决定迁移路径：
 ///    - v1 → v3：合并 v1→v2 + v2→v3 步骤
 ///    - v2 → v3：丢弃 font_family / ui_font_family / ui_font_size 字段
-/// 3. 都失败则返回默认值
+/// 3. 都失败则把损坏文件备份为 settings.json.corrupt 后返回默认值
 ///
 /// TestSettings 兼容迁移：原始 JSON 中**没有** `test` 字段时，
 /// 才把 `runtime.fsize_mb` 复制到 `test.fsize_mb`（仅一次，不重复迁移）。
@@ -595,7 +595,17 @@ pub fn load(base: &Path) -> AppSettings {
                                 _ => AppSettings::default(),
                             }
                         }
-                        Err(_) => AppSettings::default(),
+                        Err(_) => {
+                            // JSON 完全无法解析（写一半崩溃 / 外部编辑损坏）：
+                            // 先把损坏文件改名备份再回退默认值，
+                            // 避免编译器路径等配置无声丢失后无从找回
+                            let src = settings_path(base);
+                            let dst = base.join("settings.json.corrupt");
+                            // Windows 的 rename 不覆盖已存在的目标，先移除旧备份
+                            let _ = fs::remove_file(&dst);
+                            let _ = fs::rename(&src, &dst);
+                            AppSettings::default()
+                        }
                     }
                 }
             }
@@ -1055,6 +1065,40 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let s = load(tmp.path());
         assert_eq!(s.compiler.cpp_standard, "c++17");
+    }
+
+    #[test]
+    fn load_corrupt_json_backups_then_defaults() {
+        // 损坏的 settings.json（写一半崩溃 / 外部编辑破坏）：
+        // 应回退默认值，且原文件被备份为 settings.json.corrupt 而非静默丢弃
+        let tmp = tempfile::TempDir::new().unwrap();
+        let corrupt = "{ not valid json !!!";
+        std::fs::write(tmp.path().join("settings.json"), corrupt).unwrap();
+
+        let s = load(tmp.path());
+        assert_eq!(s.compiler.cpp_standard, "c++17", "应回退默认值");
+
+        let backed = std::fs::read_to_string(tmp.path().join("settings.json.corrupt"))
+            .expect("损坏文件应已备份");
+        assert_eq!(backed, corrupt, "备份内容应与原损坏文件一致");
+        assert!(
+            !tmp.path().join("settings.json").exists(),
+            "损坏文件应已被移走"
+        );
+    }
+
+    #[test]
+    fn load_corrupt_json_twice_overwrites_old_backup() {
+        // 再次损坏时新备份应覆盖旧备份（remove_file + rename 保证跨平台）
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("settings.json"), "corrupt #1").unwrap();
+        load(tmp.path());
+        // 模拟：应用保存了新设置后又再次损坏
+        std::fs::write(tmp.path().join("settings.json"), "corrupt #2").unwrap();
+        load(tmp.path());
+
+        let backed = std::fs::read_to_string(tmp.path().join("settings.json.corrupt")).unwrap();
+        assert_eq!(backed, "corrupt #2", "新备份应覆盖旧备份");
     }
 
     #[test]

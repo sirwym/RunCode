@@ -17,7 +17,7 @@ export interface PtyExitInfo {
   maxRssKb: number | null;
 }
 
-// 测试判定诊断信息（与后端 test_judge_info 事件对应，发往 DevTools Console）
+// 测试判定诊断信息（与后端 test_judge_info 事件对应，UI 展示 + DevTools Console）
 export interface TestJudgeInfo {
   case_id: string;
   index: number;
@@ -74,8 +74,14 @@ interface RunManagerState {
   // 测试逐例进度
   testProgress: TestProgress | null;
 
+  /** 测试判定诊断（按 runId 归属，仅与同 runId 的 testResult 配套展示，
+   *  避免 tab 快照恢复旧结果时串到新运行的诊断） */
+  judgeInfo: { runId: string; byCase: Record<string, TestJudgeInfo> } | null;
+
   // PTY 交互运行
   ptyRunId: string | null;
+  /** 当前 PTY 运行的发起 tab（快照写入键，不随 tab 切换变化） */
+  ptyInitiatorTabId: string | null;
   ptyExitInfo: PtyExitInfo | null;
   /** PTY 运行开始时间戳（毫秒），用于计算 durationMs */
   ptyStartTime: number | null;
@@ -119,7 +125,9 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   testResult: null,
   error: null,
   testProgress: null,
+  judgeInfo: null,
   ptyRunId: null,
+  ptyInitiatorTabId: null,
   ptyExitInfo: null,
   ptyStartTime: null,
   ptyReadySeq: 0,
@@ -128,8 +136,43 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
   resultsByTab: {},
 
   setActiveTab: (tabId) => {
-    const snapshot = tabId ? (get().resultsByTab[tabId] ?? emptyTabResults()) : emptyTabResults();
+    const s = get();
+    // 同 tab 重复切换：no-op，不影响进行中的运行
+    if (s.activeTabId === tabId) return;
+
+    let resultsByTab = s.resultsByTab;
+    // 切换 tab 即放弃当前运行：终止后端任务 + 删除发起 tab 快照（切回彻底空白）
+    if (s.activeRunId) {
+      // 运行存续期间 activeTabId 必为发起 tab（任何切换都会在此终止运行）
+      const initiatorTabId = s.activeTabId;
+      if (initiatorTabId) {
+        resultsByTab = { ...resultsByTab };
+        delete resultsByTab[initiatorTabId];
+      }
+      if (s.kind === "interactive") {
+        // 含编译期（stop_pty_run 幂等）；后端 cancelled 标志保证 pty_exit 不再 emit
+        void invoke<boolean>("stop_pty_run", { runId: s.activeRunId }).catch(() => {});
+      } else {
+        // 批量：异步取消后端，晚到结果由各 runId 守卫丢弃
+        void invoke<boolean>("stop_run", { runId: s.activeRunId }).catch(() => {});
+      }
+    }
+
+    const snapshot = tabId ? (resultsByTab[tabId] ?? emptyTabResults()) : emptyTabResults();
     set({
+      ...(s.activeRunId
+        ? {
+            // 运行被切换终止：归零运行态（快照已删，不写"已取消"）
+            activeRunId: null,
+            ptyRunId: null,
+            ptyInitiatorTabId: null,
+            ptyStartTime: null,
+            kind: null,
+            status: "idle",
+            error: null,
+          }
+        : {}),
+      resultsByTab,
       activeTabId: tabId,
       runResult: snapshot.runResult,
       testResult: snapshot.testResult,
@@ -229,14 +272,19 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       runResult: null,
       testResult: null,
       testProgress: null,
+      // 初始化而非 null：旧 run 的残余监听事件会被 runId 守卫挡住，
+      // 避免其在 null 期抢占播种错误 runId（新 run 事件反而被挡）
+      judgeInfo: { runId, byCase: {} },
     });
 
     // 监听逐例进度
     let unlisten: UnlistenFn | null = null;
-    // 监听判定诊断信息，打印到 DevTools Console 辅助排查
+    // 监听判定诊断信息：存入 judgeInfo 供 UI 展示，同时打印 DevTools Console 辅助排查
     let unlistenJudge: UnlistenFn | null = null;
     try {
       unlisten = await listen<TestProgress>("test_progress", (e) => {
+        // 守卫：切换 tab 终止运行后（activeRunId 已清），旧进度事件不再刷新新 tab
+        if (get().activeRunId !== runId) return;
         set({ testProgress: e.payload });
       });
       unlistenJudge = await listen<TestJudgeInfo>("test_judge_info", (e) => {
@@ -250,6 +298,16 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
         } else if (!p.passed) {
           console.log("  (输出较大，使用「对比差异」查看)");
         }
+        // 存入 state（runId 守卫：旧 run 残余监听不写入新 run 的诊断）
+        set((s) => {
+          if (s.judgeInfo?.runId !== runId) return s;
+          return {
+            judgeInfo: {
+              runId,
+              byCase: { ...s.judgeInfo.byCase, [p.case_id]: p },
+            },
+          };
+        });
       });
     } catch (err) {
       console.warn("[useRunManager] test_progress 监听注册失败，测试进度将无反馈", err);
@@ -340,6 +398,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
     set({
       activeRunId: runId,
       ptyRunId: runId,
+      ptyInitiatorTabId: initiatorTabId,
       status: "running",
       error: null,
       kind: "interactive",
@@ -401,6 +460,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
             activeRunId: null,
             status: "error",
             ptyRunId: null,
+            ptyInitiatorTabId: null,
             kind: null,
             compileError: isStillActive ? result.stderr : s.compileError,
             resultsByTab,
@@ -414,6 +474,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
         activeRunId: null,
         status: "error",
         ptyRunId: null,
+        ptyInitiatorTabId: null,
         kind: null,
         error: localizeError(e),
       });
@@ -432,7 +493,8 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
     const durationMs = startTime ? Date.now() - startTime : null;
     const exitInfo: PtyExitInfo = { exitCode: null, killedBy: "cancelled", durationMs, maxRssKb: null };
     set((s) => {
-      const initiatorTabId = s.activeTabId;
+      const initiatorTabId = s.ptyInitiatorTabId;
+      const isStillActive = s.activeTabId === initiatorTabId;
       const resultsByTab = initiatorTabId
         ? {
             ...s.resultsByTab,
@@ -447,9 +509,10 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       return {
         activeRunId: null,
         ptyRunId: null,
+        ptyInitiatorTabId: null,
         status: "idle",
         kind: null,
-        ptyExitInfo: exitInfo,
+        ptyExitInfo: isStillActive ? exitInfo : s.ptyExitInfo,
         ptyStartTime: null,
         resultsByTab,
       };
@@ -458,10 +521,14 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
 
   onPtyExit: (info, maxRssKb) => {
     set((s) => {
+      // 切换 tab 已终止会话（ptyRunId 清空）：残余 pty_exit 事件直接忽略，
+      // 不写快照（已删）、不破坏新 tab 可能已开始的新运行
+      if (!s.ptyRunId) return s;
       const startTime = s.ptyStartTime;
       const durationMs = startTime ? Date.now() - startTime : null;
       const exitInfo: PtyExitInfo = { ...info, durationMs, maxRssKb };
-      const initiatorTabId = s.activeTabId;
+      const initiatorTabId = s.ptyInitiatorTabId;
+      const isStillActive = s.activeTabId === initiatorTabId;
       const resultsByTab = initiatorTabId
         ? {
             ...s.resultsByTab,
@@ -476,9 +543,10 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       return {
         activeRunId: null,
         ptyRunId: null,
+        ptyInitiatorTabId: null,
         status: "idle",
         kind: null,
-        ptyExitInfo: exitInfo,
+        ptyExitInfo: isStillActive ? exitInfo : s.ptyExitInfo,
         ptyStartTime: null,
         resultsByTab,
       };
@@ -517,6 +585,7 @@ export const useRunManager = create<RunManagerState>((set, get) => ({
       activeRunId: null,
       kind: null,
       ptyRunId: null,
+      ptyInitiatorTabId: null,
       ptyExitInfo: null,
       ptyStartTime: null,
       testProgress: null,

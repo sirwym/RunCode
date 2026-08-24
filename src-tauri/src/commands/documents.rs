@@ -32,11 +32,20 @@ fn basename(p: &str) -> String {
 fn check_file_size(path: &str) -> Result<(), AppError> {
     let metadata = fs::metadata(path)?;
     if metadata.len() > MAX_FILE_SIZE {
-        return Err(AppError::Other {
-            detail: format!("文件大小 {} 字节超过 10MB 上限", metadata.len()),
+        return Err(AppError::FileTooLarge {
+            size: metadata.len(),
+            max_mb: MAX_FILE_SIZE / (1024 * 1024),
         });
     }
     Ok(())
+}
+
+/// 读取文件并要求内容为 UTF-8。
+/// 非 UTF-8（如 GBK/ANSI 编码的旧文件）返回 `InvalidEncoding`，
+/// 明确报错而非静默乱码覆盖原文件。
+fn read_file_utf8(path: &str) -> Result<String, AppError> {
+    let bytes = fs::read(path)?;
+    String::from_utf8(bytes).map_err(|_| AppError::InvalidEncoding)
 }
 
 /// 打开并读取文件，并写入最近文件列表。
@@ -46,7 +55,7 @@ fn check_file_size(path: &str) -> Result<(), AppError> {
 #[tauri::command]
 pub async fn open_file(app: AppHandle, path: String) -> Result<FileContent, AppError> {
     check_file_size(&path)?;
-    let content = fs::read_to_string(&path)?;
+    let content = read_file_utf8(&path)?;
     // 写入最近文件（失败不影响打开）
     if let Ok(base) = app.path().app_data_dir() {
         let name = basename(&path);
@@ -84,11 +93,34 @@ mod tests {
         std::fs::write(&big_path, &content).unwrap();
         let err = check_file_size(big_path.to_str().unwrap()).unwrap_err();
         match err {
-            AppError::Other { detail } => {
-                assert!(detail.contains("超过 10MB 上限"), "实际: {detail}");
+            AppError::FileTooLarge { size, max_mb } => {
+                assert_eq!(size, (10 * 1024 * 1024 + 1) as u64);
+                assert_eq!(max_mb, 10);
             }
-            other => panic!("预期 AppError::Other，实际: {other:?}"),
+            other => panic!("预期 AppError::FileTooLarge，实际: {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_file_utf8_rejects_gbk_content() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("gbk.cpp");
+        // "你好" 的 GBK 编码（非 UTF-8 序列）
+        std::fs::write(&path, [0xC4, 0xE3, 0xBA, 0xC3]).unwrap();
+        let err = read_file_utf8(path.to_str().unwrap()).unwrap_err();
+        match err {
+            AppError::InvalidEncoding => {}
+            other => panic!("预期 AppError::InvalidEncoding，实际: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_file_utf8_accepts_utf8_content() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("ok.cpp");
+        std::fs::write(&path, "int main() {}").unwrap();
+        let content = read_file_utf8(path.to_str().unwrap()).expect("UTF-8 文件应可读");
+        assert_eq!(content, "int main() {}");
     }
 
     #[test]

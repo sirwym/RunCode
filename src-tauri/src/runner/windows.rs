@@ -70,7 +70,7 @@ pub async fn run_with_limits(
 
     // 把子进程加入 JobObject（Windows 8+ 允许把已启动的进程加入 JobObject）
     // 返回 true=正常，false=降级（CPU 时间限制未生效，仅墙钟超时可用）
-    let job_object_degraded = assign_process_to_job(h_job.0, pid)?;
+    let job_object_degraded = assign_process_to_job(&h_job, pid)?;
 
     // 写 stdin（独立任务，避免阻塞 select）
     if let Some(input) = stdin {
@@ -83,8 +83,14 @@ pub async fn run_with_limits(
     }
 
     // 取出 stdout/stderr 句柄，让 child.wait() 不被管道阻塞
-    let stdout = child.stdout.take().expect("stdout 已设为 piped");
-    let stderr = child.stderr.take().expect("stderr 已设为 piped");
+    // spawn 成功时 piped 句柄必为 Some（语言保证），此处错误返回仅是防御性兜底，
+    // 避免极端情况下 panic 使整个后端崩溃
+    let stdout = child.stdout.take().ok_or_else(|| AppError::ProcessGroup {
+        detail: "子进程 stdout 句柄缺失".into(),
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| AppError::ProcessGroup {
+        detail: "子进程 stderr 句柄缺失".into(),
+    })?;
 
     // 独立任务读两路输出（共享缓冲区：超时后仍能获取已读数据）
     let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::with_capacity(8 * 1024)));
@@ -248,8 +254,15 @@ use windows::Win32::System::Threading::PROCESS_QUERY_INFORMATION;
 /// 包装 Windows HANDLE 使其实现 Send。
 /// HANDLE 是 *mut c_void 的别名，裸指针不实现 Send，无法跨 await 点持有。
 /// JobObject 句柄在单线程内使用，仅用于让 async future 满足 Send 约束。
-struct SendHandle(HANDLE);
+pub struct SendHandle(HANDLE);
 unsafe impl Send for SendHandle {}
+impl SendHandle {
+    /// 终止 JobObject 内所有进程（整棵进程树，含孙进程）。
+    /// 返回 false 表示调用失败（句柄无效等，正常不应发生）。
+    pub fn terminate_tree(&self) -> bool {
+        unsafe { TerminateJobObject(self.0, 1).is_ok() }
+    }
+}
 impl Drop for SendHandle {
     fn drop(&mut self) {
         // KILL_ON_JOB_CLOSE 确保句柄关闭时杀掉 JobObject 内所有子进程
@@ -287,10 +300,38 @@ fn create_job_with_limits(cpu_secs: u64) -> Result<SendHandle, AppError> {
     }
 }
 
-/// 把进程加入 JobObject
+/// 创建仅含 KILL_ON_JOB_CLOSE 的 JobObject（PTY 交互运行用）。
+/// 与 create_job_with_limits 的区别：不设 CPU 时间限制（交互程序不限时长），
+/// 仅保证句柄关闭或 terminate_tree 时杀掉 JobObject 内整棵进程树
+/// （含学生程序 system()/fork 产生的孙进程，对齐 Unix kill(-pgid) 行为）。
+pub fn create_kill_on_close_job() -> Result<SendHandle, AppError> {
+    unsafe {
+        let h_job = CreateJobObjectW(None, None)
+            .map_err(|e| AppError::Other {
+                detail: format!("CreateJobObjectW 失败: {e}"),
+            })?;
+
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+        SetInformationJobObject(
+            h_job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+        .map_err(|e| AppError::Other {
+            detail: format!("SetInformationJobObject 失败: {e}"),
+        })?;
+
+        Ok(SendHandle(h_job))
+    }
+}
+
+/// 把进程加入 JobObject（pub：PTY 交互运行复用此基础设施）
 /// 返回 true 表示成功加入（CPU 时间限制生效）；
 /// 返回 false 表示降级（AssignProcessToJobObject 失败，仅墙钟超时可用）。
-fn assign_process_to_job(h_job: HANDLE, pid: u32) -> Result<bool, AppError> {
+pub fn assign_process_to_job(h_job: &SendHandle, pid: u32) -> Result<bool, AppError> {
     use windows::Win32::System::Threading::OpenProcess;
     use windows::Win32::System::Threading::PROCESS_SET_QUOTA;
 
@@ -304,7 +345,7 @@ fn assign_process_to_job(h_job: HANDLE, pid: u32) -> Result<bool, AppError> {
         // 父 JobObject 中且不允许 breakaway）会返回 ERROR_ACCESS_DENIED。
         // 此时 CPU 时间限制失效，但墙钟超时仍能防死循环，足够教学场景使用。
         // 普通用户机器（不处于 JobObject 中）不受影响，CPU 限制正常。
-        let degraded = if let Err(e) = AssignProcessToJobObject(h_job, h_process) {
+        let degraded = if let Err(e) = AssignProcessToJobObject(h_job.0, h_process) {
             eprintln!("警告: AssignProcessToJobObject 失败 ({e}), CPU 限制将不生效");
             true // 降级
         } else {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useRunManager } from "./useRunManager";
+import type { TestJudgeInfo } from "./useRunManager";
 import type { TestRunResult, RunResult, TestProgress, StartPtyResult } from "../types";
 
 // Mock @tauri-apps/api/core 的 invoke
@@ -60,7 +61,9 @@ describe("useRunManager per-tab 隔离", () => {
       testResult: null,
       error: null,
       testProgress: null,
+      judgeInfo: null,
       ptyRunId: null,
+      ptyInitiatorTabId: null,
       ptyExitInfo: null,
       ptyStartTime: null,
       compileError: null,
@@ -129,33 +132,37 @@ describe("useRunManager per-tab 隔离", () => {
     expect(useRunManager.getState().testResult?.passed).toBe(0);
   });
 
-  it("运行中切换 tab，结果仍写入发起 tab", async () => {
+  it("运行中切换 tab → 终止运行、删除发起 tab 快照、晚到结果被守卫丢弃", async () => {
     useRunManager.getState().setActiveTab("tab-a");
     const resultA = makeTestRunResult(1, 4);
 
     // 让 invoke 返回一个 pending promise，便于中途切换 tab
     let resolveRun: (v: TestRunResult) => void = () => {};
     invokeMock.mockReturnValueOnce(new Promise<TestRunResult>((res) => { resolveRun = res; }));
+    invokeMock.mockResolvedValueOnce(true); // stop_run（切换终止时 fire-and-forget 调用）
 
     const runPromise = useRunManager.getState().runTests("code", "suite-a", false);
+    expect(useRunManager.getState().activeRunId).not.toBeNull();
 
-    // 运行中切到 tab-b
+    // 运行中切到 tab-b → 运行被终止，发起 tab 快照被删（含历史）
     useRunManager.getState().setActiveTab("tab-b");
     expect(useRunManager.getState().activeTabId).toBe("tab-b");
-    expect(useRunManager.getState().testResult).toBeNull();
+    expect(useRunManager.getState().activeRunId).toBeNull();
+    expect(useRunManager.getState().resultsByTab["tab-a"]).toBeUndefined();
+    expect(invokeMock.mock.calls.some((c) => c[0] === "stop_run")).toBe(true);
 
-    // 完成 → 结果写入 tab-a，不写入 tab-b
+    // 晚到的结果到达 → 被守卫丢弃，不写快照
     resolveRun(resultA);
     await runPromise;
 
-    expect(useRunManager.getState().resultsByTab["tab-a"]?.testResult?.passed).toBe(1);
+    expect(useRunManager.getState().resultsByTab["tab-a"]).toBeUndefined();
     expect(useRunManager.getState().resultsByTab["tab-b"]?.testResult ?? null).toBeNull();
     // 当前展示（tab-b）的 testResult 仍为 null
     expect(useRunManager.getState().testResult).toBeNull();
 
-    // 切回 tab-a → 看到 1/4
+    // 切回 tab-a → 彻底空白（历史快照已清）
     useRunManager.getState().setActiveTab("tab-a");
-    expect(useRunManager.getState().testResult?.passed).toBe(1);
+    expect(useRunManager.getState().testResult).toBeNull();
   });
 
   it("clearTab 删除指定 tab 的快照", () => {
@@ -170,6 +177,9 @@ describe("useRunManager per-tab 隔离", () => {
     await useRunManager.getState().compileRun("code");
     expect(useRunManager.getState().runResult).not.toBeNull();
 
+    // 生产序列：clearTab 发生在切换 activeId 之后（App effect 按 activeId 变化触发，
+    // 同 tab 重复 setActiveTab 不可达），这里用切走再切回模拟
+    useRunManager.getState().setActiveTab("tab-b");
     useRunManager.getState().clearTab("tab-a");
     useRunManager.getState().setActiveTab("tab-a");
     expect(useRunManager.getState().runResult).toBeNull();
@@ -250,6 +260,89 @@ describe("useRunManager per-tab 隔离", () => {
     expect(info!.durationMs!).toBeGreaterThanOrEqual(0);
   });
 
+  it("切换终止会话后残余 onPtyExit 被忽略，不破坏新 tab 的后续运行", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({ status: "success", run_id: "pty-1", compile_stdout: "", compile_stderr: "" });
+    await useRunManager.getState().startInteractive("code");
+
+    // PTY 运行中切到 tab-b → 会话被终止
+    invokeMock.mockResolvedValueOnce(true); // stop_pty_run
+    useRunManager.getState().setActiveTab("tab-b");
+    expect(useRunManager.getState().ptyRunId).toBeNull();
+
+    // 残余 pty_exit 事件（切换前已发出、在途）→ 守卫忽略，不写快照
+    useRunManager.getState().onPtyExit({ exitCode: 0, killedBy: null }, 2048);
+    expect(useRunManager.getState().resultsByTab["tab-a"]).toBeUndefined();
+    expect(useRunManager.getState().ptyExitInfo).toBeNull();
+    expect(useRunManager.getState().activeRunId).toBeNull();
+
+    // tab-b 立即开始新运行不受影响
+    invokeMock.mockResolvedValueOnce({ status: "success", run_id: "pty-2", compile_stdout: "", compile_stderr: "" });
+    await useRunManager.getState().startInteractive("code2");
+    expect(useRunManager.getState().ptyRunId).toBe("pty-2");
+    expect(useRunManager.getState().resultsByTab["tab-b"]?.ptyExitInfo ?? null).toBeNull();
+  });
+
+  it("切换终止会话后 stopInteractive 为 no-op（activeRunId 已清）", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({ status: "success", run_id: "x", compile_stdout: "", compile_stderr: "" });
+    await useRunManager.getState().startInteractive("code");
+
+    // 运行中切到 tab-b → 运行已被 setActiveTab 终止
+    invokeMock.mockResolvedValueOnce(true); // stop_pty_run（setActiveTab 调用）
+    useRunManager.getState().setActiveTab("tab-b");
+
+    invokeMock.mockClear();
+    await useRunManager.getState().stopInteractive();
+    // 无新增 stop_pty_run 调用，不写任何快照
+    expect(invokeMock.mock.calls.some((c) => c[0] === "stop_pty_run")).toBe(false);
+    expect(useRunManager.getState().resultsByTab["tab-a"]).toBeUndefined();
+    expect(useRunManager.getState().resultsByTab["tab-b"]?.ptyExitInfo ?? null).toBeNull();
+  });
+
+  it("同 tab 重复切换 → no-op，进行中的运行不受影响", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+    invokeMock.mockResolvedValueOnce({ status: "success", run_id: "x", compile_stdout: "", compile_stderr: "" });
+    await useRunManager.getState().startInteractive("code");
+    const runId = useRunManager.getState().activeRunId;
+
+    // 同 tab 重复 setActiveTab（关闭其他 tab 触发 activeId 不变的场景）
+    useRunManager.getState().setActiveTab("tab-a");
+    expect(useRunManager.getState().activeRunId).toBe(runId);
+    expect(useRunManager.getState().ptyRunId).toBe(runId);
+    expect(invokeMock.mock.calls.some((c) => c[0] === "stop_pty_run")).toBe(false);
+  });
+
+  it("交互运行中切换 → stop_pty_run 被调，发起 tab 历史快照一并清空", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+
+    // 预置历史快照：先完成一次编译运行
+    invokeMock.mockResolvedValueOnce(makeRunResult(true));
+    await useRunManager.getState().compileRun("code");
+    expect(useRunManager.getState().resultsByTab["tab-a"]?.runResult).not.toBeNull();
+
+    // 再开始交互运行
+    invokeMock.mockResolvedValueOnce({ status: "success", run_id: "pty-1", compile_stdout: "", compile_stderr: "" });
+    await useRunManager.getState().startInteractive("code");
+
+    // 切换 → 终止 + 历史快照一并删除
+    invokeMock.mockResolvedValueOnce(true); // stop_pty_run
+    useRunManager.getState().setActiveTab("tab-b");
+
+    const s = useRunManager.getState();
+    expect(s.activeRunId).toBeNull();
+    expect(s.ptyRunId).toBeNull();
+    expect(s.kind).toBeNull();
+    expect(s.status).toBe("idle");
+    expect(s.resultsByTab["tab-a"]).toBeUndefined(); // 含 compileRun 的历史
+    expect(invokeMock.mock.calls.some((c) => c[0] === "stop_pty_run")).toBe(true);
+
+    // 切回 tab-a → 彻底空白
+    useRunManager.getState().setActiveTab("tab-a");
+    expect(useRunManager.getState().runResult).toBeNull();
+    expect(useRunManager.getState().ptyExitInfo).toBeNull();
+  });
+
   it("testProgress 不持久化到快照（瞬时状态）", async () => {
     useRunManager.getState().setActiveTab("tab-a");
 
@@ -271,6 +364,7 @@ describe("useRunManager per-tab 隔离", () => {
     });
 
     invokeMock.mockReturnValueOnce(new Promise<TestRunResult>(() => {})); // 永不 resolve
+    invokeMock.mockResolvedValueOnce(true); // stop_run（切换终止时 fire-and-forget 调用）
     void useRunManager.getState().runTests("code", "suite-a", false);
 
     // 等待 listen 被调用
@@ -281,6 +375,71 @@ describe("useRunManager per-tab 隔离", () => {
     // 切到 tab-b → testProgress 清空
     useRunManager.getState().setActiveTab("tab-b");
     expect(useRunManager.getState().testProgress).toBeNull();
+  });
+
+  it("test_judge_info 事件按 case_id 存入 judgeInfo（runId 归属当前运行）", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+
+    type JudgeCb = (e: { payload: TestJudgeInfo }) => void;
+    const holder: { cb: JudgeCb | null } = { cb: null };
+    listenMock.mockImplementation(async (event: string, cb: JudgeCb) => {
+      if (event === "test_judge_info") holder.cb = cb;
+      return () => {};
+    });
+
+    invokeMock.mockReturnValueOnce(new Promise<TestRunResult>(() => {})); // 永不 resolve
+    void useRunManager.getState().runTests("code", "suite-a", false);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const runId = useRunManager.getState().activeRunId;
+    expect(useRunManager.getState().judgeInfo).toEqual({ runId, byCase: {} });
+
+    const judge: TestJudgeInfo = {
+      case_id: "tc_0", index: 0, total: 2, case_strict: false,
+      exit_code: 0, duration_ms: 5, time_limit_ms: 1000, time_exceeded: false,
+      passed: false, first_diff: 3, norm_equal: false,
+      expected_len: 10, actual_len: 10,
+      expected_esc: "1 2\\n", actual_esc: "1··2\\n",
+    };
+    holder.cb?.({ payload: judge });
+
+    expect(useRunManager.getState().judgeInfo).toEqual({ runId, byCase: { tc_0: judge } });
+  });
+
+  it("旧 run 的残余 judge 事件不写入新 run 的 judgeInfo", async () => {
+    useRunManager.getState().setActiveTab("tab-a");
+
+    type JudgeCb = (e: { payload: TestJudgeInfo }) => void;
+    const holderA: { cb: JudgeCb | null } = { cb: null };
+    listenMock.mockImplementation(async (event: string, cb: JudgeCb) => {
+      // 只捕获第一次注册（run A 的监听），run B 注册时保留 A 的闭包
+      if (event === "test_judge_info" && !holderA.cb) holderA.cb = cb;
+      return () => {};
+    });
+
+    // run A（永不 resolve），随后切换 tab 终止
+    invokeMock.mockReturnValueOnce(new Promise<TestRunResult>(() => {}));
+    invokeMock.mockResolvedValueOnce(true); // stop_run
+    void useRunManager.getState().runTests("code", "suite-a", false);
+    await new Promise((r) => setTimeout(r, 0));
+    useRunManager.getState().setActiveTab("tab-b");
+
+    // run B 开始（judgeInfo 已重置为 B 的 runId）
+    invokeMock.mockReturnValueOnce(new Promise<TestRunResult>(() => {}));
+    void useRunManager.getState().runTests("code", "suite-b", false);
+    await new Promise((r) => setTimeout(r, 0));
+    const runB = useRunManager.getState().activeRunId;
+    expect(useRunManager.getState().judgeInfo).toEqual({ runId: runB, byCase: {} });
+
+    // run A 的残余 judge 事件到达 → runId 守卫挡住，不写入
+    const stale: TestJudgeInfo = {
+      case_id: "tc_9", index: 9, total: 10, case_strict: false,
+      exit_code: 0, duration_ms: 1, time_limit_ms: 1000, time_exceeded: false,
+      passed: true, first_diff: null, norm_equal: true,
+      expected_len: 0, actual_len: 0, expected_esc: null, actual_esc: null,
+    };
+    holderA.cb?.({ payload: stale });
+    expect(useRunManager.getState().judgeInfo).toEqual({ runId: runB, byCase: {} });
   });
 });
 
@@ -299,7 +458,9 @@ describe("useRunManager PTY 编译成功状态", () => {
       testResult: null,
       error: null,
       testProgress: null,
+      judgeInfo: null,
       ptyRunId: null,
+      ptyInitiatorTabId: null,
       ptyExitInfo: null,
       ptyStartTime: null,
       compileError: null,
@@ -368,7 +529,9 @@ describe("useRunManager 前端生成 runId", () => {
       testResult: null,
       error: null,
       testProgress: null,
+      judgeInfo: null,
       ptyRunId: null,
+      ptyInitiatorTabId: null,
       ptyExitInfo: null,
       ptyStartTime: null,
       compileError: null,
@@ -459,7 +622,7 @@ describe("useRunManager startInteractive 预生成 runId", () => {
     useRunManager.setState({
       activeRunId: null, kind: null, status: "idle",
       runResult: null, testResult: null, error: null, testProgress: null,
-      ptyRunId: null, ptyExitInfo: null, ptyStartTime: null,
+      ptyRunId: null, ptyInitiatorTabId: null, ptyExitInfo: null, ptyStartTime: null,
       compileError: null,
       activeTabId: null, resultsByTab: {},
     });
@@ -500,7 +663,7 @@ describe("useRunManager stop 后旧请求覆盖守卫", () => {
     useRunManager.setState({
       activeRunId: null, kind: null, status: "idle",
       runResult: null, testResult: null, error: null, testProgress: null,
-      ptyRunId: null, ptyExitInfo: null, ptyStartTime: null,
+      ptyRunId: null, ptyInitiatorTabId: null, ptyExitInfo: null, ptyStartTime: null,
       compileError: null,
       activeTabId: null, resultsByTab: {},
     });
@@ -624,7 +787,9 @@ describe("useRunManager compileRun/runTests 编译失败 compileError 接入", (
       testResult: null,
       error: null,
       testProgress: null,
+      judgeInfo: null,
       ptyRunId: null,
+      ptyInitiatorTabId: null,
       ptyExitInfo: null,
       ptyStartTime: null,
       compileError: null,
@@ -717,6 +882,7 @@ describe("useRunManager PTY 就绪聚焦信号 ptyReadySeq", () => {
       error: null,
       testProgress: null,
       ptyRunId: null,
+      ptyInitiatorTabId: null,
       ptyExitInfo: null,
       ptyStartTime: null,
       ptyReadySeq: 0,

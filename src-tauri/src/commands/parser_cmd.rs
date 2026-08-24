@@ -36,7 +36,6 @@ pub async fn generate_cfg(code: String) -> Result<CfgResult, AppError> {
         .await
         .map_err(|e| AppError::Other {
             detail: format!("CFG 生成任务失败: {e}"),
-        })?
-        .map_err(|e| AppError::Other { detail: e })?;
+        })??;
     Ok(result)
 }

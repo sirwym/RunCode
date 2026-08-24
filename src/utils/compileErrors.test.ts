@@ -119,6 +119,18 @@ describe("translateGccError", () => {
     expect(translateGccError("redefinition of 'int main()'")).toBe("重复定义（同一名称定义了多次）");
   });
 
+  it("匹配 cannot assign to variable with const-qualified type → 返回中文 const 赋值提示", () => {
+    expect(translateGccError("cannot assign to variable 'A' with const-qualified type 'const int'")).toBe(
+      "不能给 const 常量赋值（const 变量一经初始化就不能修改）"
+    );
+  });
+
+  it("匹配 assignment of read-only variable（GCC/Windows 措辞）→ 返回中文 const 赋值提示", () => {
+    expect(translateGccError("assignment of read-only variable 'A'")).toBe(
+      "不能给 const 常量赋值（const 变量一经初始化就不能修改）"
+    );
+  });
+
   // ========== 本次新增 error 规则测试 ==========
 
   it("匹配 unexpected character <U+XXXX>（clang 中文符号）→ 返回中文全角符号提示", () => {
@@ -372,6 +384,30 @@ describe("formatStderrWithTranslation", () => {
       "    cout 《〈 \"Hello, RunCode!\";",
       "              ^~~~~~~~~~~~~~~~~",
       "2 warnings and 3 errors generated.",
+    ].join("\n"));
+  });
+
+  it("真实样本3：const 变量赋值（note 行不翻译，caret 行原样保留）", () => {
+    // 用户提供的真实编译错误：const int A = 100; 后 A = 120;
+    const stderr = [
+      "main.cpp:13:7: error: cannot assign to variable 'A' with const-qualified type 'const int'",
+      "    A = 120;",
+      "    ~ ^",
+      "main.cpp:5:15: note: variable 'A' declared const here",
+      "    const int A = 100;",
+      "    ~~~~~~~~~~^~~~~~~",
+      "1 error generated.",
+    ].join("\n");
+    const result = formatStderrWithTranslation(stderr);
+    expect(result).toBe([
+      "main.cpp:13:7: error: cannot assign to variable 'A' with const-qualified type 'const int'",
+      "  \u21B3 不能给 const 常量赋值（const 变量一经初始化就不能修改）",
+      "    A = 120;",
+      "    ~ ^",
+      "main.cpp:5:15: note: variable 'A' declared const here",
+      "    const int A = 100;",
+      "    ~~~~~~~~~~^~~~~~~",
+      "1 error generated.",
     ].join("\n"));
   });
 

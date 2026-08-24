@@ -297,6 +297,30 @@ async fn start_pty_run_inner(
     let pid = child.process_id();
     drop(pair.slave); // 释放 slave，master 持有唯一读端
 
+    // 4.5 Windows：把子进程加入 KILL_ON_JOB_CLOSE JobObject，
+    // kill/会话结束时杀掉整棵进程树（学生程序 system()/fork 的孙进程，B1-4）。
+    // 创建或加入失败均降级为旧行为（仅终止主进程），不阻断交互运行。
+    #[cfg(windows)]
+    let job = {
+        use crate::runner::executor::windows::{assign_process_to_job, create_kill_on_close_job};
+        match create_kill_on_close_job() {
+            Ok(job) => {
+                let assigned = pid
+                    .map(|p| assign_process_to_job(&job, p).unwrap_or(false))
+                    .unwrap_or(false);
+                if assigned {
+                    Some(job)
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                eprintln!("警告: PTY JobObject 创建失败 ({e})，停止时仅终止主进程");
+                None
+            }
+        }
+    };
+
     // 5. clone reader / take writer / clone killer
     let reader = pair
         .master
@@ -310,6 +334,9 @@ async fn start_pty_run_inner(
     let killer = child.clone_killer(); // clone_killer 直接返回，不是 Result
 
     // 6. 存入 PtyManager
+    #[cfg(windows)]
+    let session = PtySession::new(pair.master, writer, killer, pid, work_dir, job);
+    #[cfg(not(windows))]
     let session = PtySession::new(pair.master, writer, killer, pid, work_dir);
     pty_manager.insert(&run_id, session);
 
@@ -318,6 +345,8 @@ async fn start_pty_run_inner(
     let output_limit_triggered = Arc::new(AtomicBool::new(false));
     // 注册 cancelled 标志：stop_pty_run 设置后，等待线程跳过 emit，保证 pty_exit 单次 emit
     let cancelled_flag = pty_manager.register_cancelled_flag(&run_id);
+    // 注册 pty_exit emit 抢占标志：等待线程与 stop_pty_run 首次抢占者 emit，恰好一次
+    let exit_claim = pty_manager.register_exit_claim(&run_id);
     let app_reader = app.clone();
     let run_id_reader = run_id.clone();
     let output_limit_flag_reader = output_limit_triggered.clone();
@@ -390,6 +419,7 @@ async fn start_pty_run_inner(
     let run_id_waiter = run_id.clone();
     let output_limit_flag_waiter = output_limit_triggered.clone();
     let cancelled_flag_waiter = cancelled_flag.clone();
+    let exit_claim_waiter = exit_claim.clone();
     std::thread::spawn(move || {
         let mut child = child;
 
@@ -518,8 +548,11 @@ async fn start_pty_run_inner(
         );
 
         // 若已被 stop_pty_run 取消，跳过 emit（stop_pty_run 已 emit 过 pty_exit）
-        // 保证 pty_exit 单次 emit 语义，避免前端 onExit 被调用两次
-        if !cancelled_flag_waiter.load(Ordering::Relaxed) {
+        // 再抢占 emit 权：自然退出与 stop_pty_run 竞态时，首次 swap(true) 者负责 emit。
+        // 两道守卫共同保证 pty_exit 单次 emit 语义，避免前端 onExit 被调用两次
+        if !cancelled_flag_waiter.load(Ordering::Relaxed)
+            && !exit_claim_waiter.swap(true, Ordering::Relaxed)
+        {
             let _ = app_waiter.emit(
                 "pty_exit",
                 PtyExitEvent {
@@ -586,26 +619,34 @@ pub async fn stop_pty_run(
     run_manager: State<'_, RunManager>,
     pty_manager: State<'_, PtyManager>,
 ) -> Result<bool, AppError> {
-    // 1. kill PTY 子进程
-    pty_manager.kill(&run_id);
-    // 2. cancel RunManager 会话
-    let cancelled = run_manager.cancel(&run_id);
-    // 3. 标记 cancelled：等待线程检测到此标志后跳过 emit，保证 pty_exit 单次 emit
+    // 1. 抢占 pty_exit emit 权：必须在 kill 之前（等待线程醒来后可能清理标志表）。
+    //    与等待线程的自然退出路径互斥：首次抢占者 emit，另一方跳过，
+    //    覆盖自然退出与停止同时发生、快速连点停止两类双发窗口
+    let should_emit = pty_manager.try_claim_exit(&run_id);
+    // 2. 先标记 cancelled 再 kill：等待线程 kill 后唤醒检查此标志，跳过自身 emit
     pty_manager.mark_cancelled(&run_id);
-    // 4. 清理（等待线程也会清理，但这里是幂等的）
+    // 3. kill PTY 子进程
+    pty_manager.kill(&run_id);
+    // 4. cancel RunManager 会话
+    let cancelled = run_manager.cancel(&run_id);
+    // 5. 清理（等待线程也会清理，但这里是幂等的）
     run_manager.complete(&run_id);
-    pty_manager.remove(&run_id);
 
-    // 5. 通知前端 PTY 已退出（用户取消时不查内存，max_rss_kb=0）
-    let _ = app.emit(
-        "pty_exit",
-        PtyExitEvent {
-            run_id,
-            exit_code: None,
-            killed_by: Some("cancelled"),
-            max_rss_kb: 0,
-        },
-    );
+    // 6. 通知前端 PTY 已退出（仅当抢占成功；用户取消时不查内存，max_rss_kb=0）
+    if should_emit {
+        let _ = app.emit(
+            "pty_exit",
+            PtyExitEvent {
+                run_id: run_id.clone(),
+                exit_code: None,
+                killed_by: Some("cancelled"),
+                max_rss_kb: 0,
+            },
+        );
+    }
+
+    // 7. 清理会话与标志（须在 try_claim 之后）
+    pty_manager.remove(&run_id);
 
     Ok(cancelled)
 }

@@ -68,10 +68,10 @@ export function formatCfgError(
 ): string {
   const err = e as AppErrorPayload;
   if (err && typeof err === "object" && typeof err.code === "string") {
-    const detail = err.params?.detail ?? "";
-    if (detail.includes("未找到函数定义")) {
+    if (err.code === "cfg_no_function") {
       return t("panel.flowchartNoFunction");
     }
+    const detail = err.params?.detail ?? err.code;
     return t("panel.flowchartError", { detail });
   }
   return t("panel.flowchartError", { detail: String(e) });
@@ -175,6 +175,8 @@ export default function FlowchartPanel({
   const contentRef = useRef<HTMLDivElement>(null);
   const renderIdRef = useRef(0);
   const lastCfgRef = useRef<CfgResult | null>(null);
+  /** 上次生成对应的代码版本：切回面板时检测代码是否已变化 */
+  const lastGeneratedCodeRef = useRef<string | null>(null);
   // 持有最新 onNodeClick，避免内联箭头函数引用变化导致 useEffect 频繁触发
   const onNodeClickRef = useRef(onNodeClick);
   onNodeClickRef.current = onNodeClick;
@@ -360,6 +362,8 @@ export default function FlowchartPanel({
   );
 
   const generate = useCallback(async () => {
+    // 标记本次处理的代码版本（含失败路径）：代码未变时切回面板不重复 invoke
+    lastGeneratedCodeRef.current = code;
     if (!code.trim()) {
       setError(t("panel.flowchartNoCode"));
       setHasResult(false);
@@ -392,9 +396,10 @@ export default function FlowchartPanel({
     }
   }, [code, t, renderMermaid]);
 
-  // 面板首次可见时自动生成
+  // 面板变为可见：首次自动生成，或代码在上次生成后有变化时自动重新生成
   useEffect(() => {
-    if (visible && !hasResult && !loading && !error) {
+    if (!visible || loading) return;
+    if (lastGeneratedCodeRef.current === null || lastGeneratedCodeRef.current !== code) {
       void generate();
     }
   }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps

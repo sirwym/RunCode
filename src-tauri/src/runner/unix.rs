@@ -279,8 +279,14 @@ pub async fn run_with_limits(
     }
 
     // 取出 stdout/stderr 句柄，让 child.wait() 不被管道阻塞
-    let mut stdout = child.stdout.take().expect("stdout 已设为 piped");
-    let mut stderr = child.stderr.take().expect("stderr 已设为 piped");
+    // spawn 成功时 piped 句柄必为 Some（语言保证），此处错误返回仅是防御性兜底，
+    // 避免极端情况下 panic 使整个后端崩溃
+    let mut stdout = child.stdout.take().ok_or_else(|| AppError::ProcessGroup {
+        detail: "子进程 stdout 句柄缺失".into(),
+    })?;
+    let mut stderr = child.stderr.take().ok_or_else(|| AppError::ProcessGroup {
+        detail: "子进程 stderr 句柄缺失".into(),
+    })?;
 
     // 独立任务读两路输出
     let stdout_task =

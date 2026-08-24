@@ -137,8 +137,14 @@ pub fn import_from_zip(
     for pair in &pairs {
         let input_key = pair.input_path.to_string_lossy().into_owned();
         let expected_key = pair.expected_path.to_string_lossy().into_owned();
-        let input_idx = *file_map.get(&input_key).unwrap();
-        let expected_idx = *file_map.get(&expected_key).unwrap();
+        // 配对结果来自 file_map 的键，正常必然命中；此处的错误返回是防御性兜底，
+        // 避免异常输入（如非常规文件名编码）导致 panic 使整个后端崩溃
+        let input_idx = *file_map.get(&input_key).ok_or_else(|| AppError::Other {
+            detail: format!("ZIP 条目索引缺失: {input_key}"),
+        })?;
+        let expected_idx = *file_map.get(&expected_key).ok_or_else(|| AppError::Other {
+            detail: format!("ZIP 条目索引缺失: {expected_key}"),
+        })?;
 
         let mut input_buf = Vec::new();
         let mut expected_buf = Vec::new();
@@ -463,5 +469,119 @@ mod tests {
 
         let result = import_from_directory(base, &suite_id, base, false).unwrap();
         assert_eq!(result.imported, 0, "无配对应导入 0 条");
+    }
+
+    /// IEEE CRC-32（无表实现，仅供测试构造 ZIP 用）
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc: u32 = 0xFFFF_FFFF;
+        for &b in data {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
+        }
+        !crc
+    }
+
+    /// 手工构造 stored（无压缩）ZIP，文件名使用原始字节。
+    /// zip crate 的 ZipWriter 只接受 &str 文件名，写不出非 UTF-8 原始字节，
+    /// 故按 ZIP 规范手写二进制结构，用于实测非 UTF-8 文件名的读取行为。
+    fn write_raw_name_zip(path: &Path, utf8_flag: bool, entries: &[(&[u8], &[u8])]) {
+        let mut z: Vec<u8> = Vec::new();
+        let mut central: Vec<u8> = Vec::new();
+        let flags: u16 = if utf8_flag { 0x0800 } else { 0 };
+        for (name, data) in entries {
+            let offset = z.len() as u32;
+            let crc = crc32(data);
+            // Local File Header
+            z.extend_from_slice(&[0x50, 0x4B, 0x03, 0x04]);
+            z.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            z.extend_from_slice(&flags.to_le_bytes());
+            z.extend_from_slice(&0u16.to_le_bytes()); // method: stored
+            z.extend_from_slice(&0u16.to_le_bytes()); // mod time
+            z.extend_from_slice(&0x5801u16.to_le_bytes()); // mod date 2024-01-01
+            z.extend_from_slice(&crc.to_le_bytes());
+            z.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            z.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            z.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            z.extend_from_slice(&0u16.to_le_bytes()); // extra len
+            z.extend_from_slice(name);
+            z.extend_from_slice(data);
+            // Central Directory Header
+            central.extend_from_slice(&[0x50, 0x4B, 0x01, 0x02]);
+            central.extend_from_slice(&20u16.to_le_bytes()); // version made by
+            central.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            central.extend_from_slice(&flags.to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes()); // method
+            central.extend_from_slice(&0u16.to_le_bytes()); // mod time
+            central.extend_from_slice(&0x5801u16.to_le_bytes()); // mod date
+            central.extend_from_slice(&crc.to_le_bytes());
+            central.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            central.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            central.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            central.extend_from_slice(&0u16.to_le_bytes()); // extra len
+            central.extend_from_slice(&0u16.to_le_bytes()); // comment len
+            central.extend_from_slice(&0u16.to_le_bytes()); // disk number start
+            central.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+            central.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+            central.extend_from_slice(&offset.to_le_bytes()); // local header offset
+            central.extend_from_slice(name);
+        }
+        let cd_offset = z.len() as u32;
+        let cd_size = central.len() as u32;
+        z.extend_from_slice(&central);
+        // End of Central Directory
+        z.extend_from_slice(&[0x50, 0x4B, 0x05, 0x06]);
+        z.extend_from_slice(&0u16.to_le_bytes()); // disk number
+        z.extend_from_slice(&0u16.to_le_bytes()); // CD start disk
+        z.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        z.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        z.extend_from_slice(&cd_size.to_le_bytes());
+        z.extend_from_slice(&cd_offset.to_le_bytes());
+        z.extend_from_slice(&0u16.to_le_bytes()); // comment len
+        fs::write(path, z).unwrap();
+    }
+
+    #[test]
+    fn zip_non_utf8_filename_cp437_no_panic() {
+        // 实测（S2-⑩）：GBK 编码的 "测试"（0xB2 0xE2 0xCA 0xD4）作文件名，未设 UTF-8 标志。
+        // zip crate 按 CP437 解码为合法 UTF-8，.in/.out 解码后同 stem 仍配对，
+        // 导入成功不 panic（推翻原报告"非 UTF-8 文件名必现崩溃"的判断）
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let suite_id = TestSuite::create(base, None).unwrap();
+
+        let zip_path = base.join("gbk.zip");
+        write_raw_name_zip(
+            &zip_path,
+            false,
+            &[(b"\xB2\xE2\xCA\xD4.in", b"5\n"), (b"\xB2\xE2\xCA\xD4.out", b"10\n")],
+        );
+
+        let result = import_from_zip(base, &suite_id, &zip_path, false).unwrap();
+        assert_eq!(result.imported, 1, "CP437 解码后应正常配对导入");
+        assert!(result.skipped.is_empty());
+    }
+
+    #[test]
+    fn zip_non_utf8_filename_flagged_lossy_no_panic() {
+        // 实测（S2-⑩）：同样 GBK 字节但设置了 UTF-8 标志（标志与内容不符的畸形 ZIP）。
+        // zip crate 走 from_utf8_lossy 替换为 U+FFFD，两文件替换后同 stem 仍配对，
+        // 导入成功不 panic
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+        let suite_id = TestSuite::create(base, None).unwrap();
+
+        let zip_path = base.join("gbk_flagged.zip");
+        write_raw_name_zip(
+            &zip_path,
+            true,
+            &[(b"\xB2\xE2\xCA\xD4.in", b"5\n"), (b"\xB2\xE2\xCA\xD4.out", b"10\n")],
+        );
+
+        let result = import_from_zip(base, &suite_id, &zip_path, false).unwrap();
+        assert_eq!(result.imported, 1, "lossy 替换后应正常配对导入");
+        assert!(result.skipped.is_empty());
     }
 }

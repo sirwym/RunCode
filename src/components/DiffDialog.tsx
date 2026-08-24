@@ -120,7 +120,7 @@ function DiffDialog({
           })}
           {diffLines.length === 0 && (
             <div className="diff-empty-hint">
-              {t("tests.diffLoading")}
+              {t("tests.diffNoDiff")}
             </div>
           )}
         </div>

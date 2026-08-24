@@ -22,6 +22,12 @@ pub struct PtySession {
     /// Windows 子进程 PID，用于查询进程内存峰值（PeakWorkingSetSize）。
     #[cfg(windows)]
     pid: Option<u32>,
+    /// Windows: KILL_ON_JOB_CLOSE JobObject（含整棵进程树）。
+    /// Some = 子进程已成功加入（kill 时树杀，对齐 Unix kill(-pgid)）；
+    /// None = 创建或加入失败（降级为仅终止主进程，旧行为）。
+    /// 会话 drop 时句柄关闭，KILL_ON_JOB_CLOSE 兜底杀掉残留孙进程。
+    #[cfg(windows)]
+    job: Mutex<Option<crate::runner::executor::windows::SendHandle>>,
     /// 持有临时编译目录，drop 时自动清理
     _work_dir: TempDir,
 }
@@ -45,7 +51,8 @@ impl PtySession {
         }
     }
 
-    /// 创建 PTY 会话（Windows 版：ConPTY 后端已提供基本进程隔离，保留 killer 行为）
+    /// 创建 PTY 会话（Windows 版：job 为 KILL_ON_JOB_CLOSE JobObject，
+    /// Some = 子进程已加入（kill 时树杀）；None = 降级为仅终止主进程）
     #[cfg(windows)]
     pub fn new(
         master: Box<dyn MasterPty + Send>,
@@ -53,12 +60,14 @@ impl PtySession {
         killer: Box<dyn ChildKiller + Send + Sync>,
         pid: Option<u32>,
         work_dir: TempDir,
+        job: Option<crate::runner::executor::windows::SendHandle>,
     ) -> Self {
         Self {
             master: Arc::new(Mutex::new(master)),
             writer: Arc::new(Mutex::new(writer)),
             killer: Mutex::new(Some(killer)),
             pid,
+            job: Mutex::new(job),
             _work_dir: work_dir,
         }
     }
@@ -96,10 +105,20 @@ impl PtySession {
                 // kill 失败（进程已退出或权限不足），回退到 killer
             }
         }
-        // Windows：portable_pty 的 killer.kill() 在 ConPTY 下可能不生效，
-        // 用 TerminateProcess 直接终止进程作为主要手段。
+        // Windows：优先 JobObject 树杀（TerminateJobObject 终止 JobObject 内所有
+        // 进程，含学生程序 system()/fork 产生的孙进程，对齐 Unix kill(-pgid) 行为）。
+        // killer/杀主进程退化为兜底：JobObject 不可用时使用（孙进程可能残留）。
         #[cfg(windows)]
         {
+            if let Ok(job) = self.job.lock() {
+                if let Some(j) = job.as_ref() {
+                    if j.terminate_tree() {
+                        return;
+                    }
+                }
+            }
+            // 降级：portable_pty 的 killer.kill() 在 ConPTY 下可能不生效，
+            // 用 TerminateProcess 直接终止主进程作为主要手段。
             if let Some(pid) = self.pid {
                 use windows::Win32::Foundation::CloseHandle;
                 use windows::Win32::System::Threading::{
@@ -133,6 +152,11 @@ pub struct PtyManager {
     /// stop_pty_run 设置标志，等待线程 emit pty_exit 前检查，
     /// 若已取消则跳过 emit，保证 pty_exit 单次 emit 语义。
     cancelled_flags: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// pty_exit 事件的 emit 抢占标志。
+    /// stop_pty_run 与等待线程两条 emit 路径首次 swap(true) 者负责 emit，
+    /// 另一方跳过，保证 pty_exit 恰好一次（覆盖快速连点停止、
+    /// 自然退出与用户停止同时发生的竞态窗口）。
+    exit_claims: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl PtyManager {
@@ -141,6 +165,7 @@ impl PtyManager {
             sessions: Mutex::new(HashMap::new()),
             first_input_emitted: Mutex::new(HashSet::new()),
             cancelled_flags: Mutex::new(HashMap::new()),
+            exit_claims: Mutex::new(HashMap::new()),
         }
     }
 
@@ -170,6 +195,28 @@ impl PtyManager {
         }
     }
 
+    /// 注册 pty_exit emit 抢占标志并返回 Arc 副本，供等待线程检查。
+    /// 必须在 spawn 等待线程前调用（与 register_cancelled_flag 同期）。
+    pub fn register_exit_claim(&self, run_id: &str) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        if let Ok(mut claims) = self.exit_claims.lock() {
+            claims.insert(run_id.to_string(), flag.clone());
+        }
+        flag
+    }
+
+    /// 抢占 pty_exit 的 emit 权（stop_pty_run 调用，须在 remove 之前）。
+    /// 返回 true = 抢占成功（首次调用），调用方负责 emit；
+    /// false = 已被等待线程或上一次停止抢占（含 run 不存在），跳过 emit。
+    pub fn try_claim_exit(&self, run_id: &str) -> bool {
+        if let Ok(claims) = self.exit_claims.lock() {
+            if let Some(flag) = claims.get(run_id) {
+                return !flag.swap(true, Ordering::Relaxed);
+            }
+        }
+        false
+    }
+
     pub fn remove(&self, run_id: &str) {
         if let Ok(mut sessions) = self.sessions.lock() {
             sessions.remove(run_id);
@@ -181,6 +228,10 @@ impl PtyManager {
         // 清理 cancelled 标记
         if let Ok(mut flags) = self.cancelled_flags.lock() {
             flags.remove(run_id);
+        }
+        // 清理 emit 抢占标记（等待线程持有 Arc 副本，不受影响）
+        if let Ok(mut claims) = self.exit_claims.lock() {
+            claims.remove(run_id);
         }
     }
 
@@ -289,6 +340,9 @@ mod tests {
         let work_dir = TempDir::new().expect("TempDir failed");
 
         let _ = label; // 仅用于调试识别
+        #[cfg(windows)]
+        let session = PtySession::new(pair.master, writer, killer, pid, work_dir, None);
+        #[cfg(not(windows))]
         let session = PtySession::new(pair.master, writer, killer, pid, work_dir);
         (session, child)
     }
@@ -419,5 +473,125 @@ mod tests {
             std::mem::forget(child2);
             std::mem::forget(manager);
         }
+    }
+
+    #[test]
+    fn exit_claim_first_wins_second_skips() {
+        // pty_exit emit 抢占语义：首次抢占成功，第二次（另一条 emit 路径）被拦截
+        let manager = PtyManager::new();
+        manager.register_exit_claim("run-1");
+
+        assert!(
+            manager.try_claim_exit("run-1"),
+            "首次抢占应成功（负责 emit）"
+        );
+        assert!(
+            !manager.try_claim_exit("run-1"),
+            "第二次抢占应失败（跳过 emit）"
+        );
+    }
+
+    #[test]
+    fn exit_claim_waiter_arc_survives_remove() {
+        // 等待线程持有 Arc 副本：remove 清空标志表后，线程内 swap 仍生效，
+        // 且 stop_pty_run 侧（表查找）此后抢占失败 → 恰好一次 emit
+        let manager = PtyManager::new();
+        let waiter_flag = manager.register_exit_claim("run-2");
+        manager.remove("run-2"); // 等待线程自身清理路径
+
+        // stop 侧走表查找：run 已被移除 → 不 emit
+        assert!(!manager.try_claim_exit("run-2"));
+        // 等待线程走 Arc 副本：仍可正常抢占 → emit 一次
+        assert!(!waiter_flag.swap(true, Ordering::Relaxed));
+    }
+
+    #[test]
+    fn exit_claim_unknown_run_returns_false() {
+        // 双重停止（连点）：第二次 stop 时 run 已被 remove → 不再 emit
+        let manager = PtyManager::new();
+        assert!(!manager.try_claim_exit("nonexistent"));
+    }
+
+    /// tasklist 中是否存在指定镜像名的进程（Windows 树杀验证用）
+    #[cfg(windows)]
+    fn tasklist_has_image(image: &str) -> bool {
+        let out = std::process::Command::new("tasklist")
+            .args([
+                "/FI",
+                &format!("IMAGENAME eq {image}"),
+                "/FO",
+                "CSV",
+                "/NH",
+            ])
+            .output()
+            .expect("tasklist 执行失败");
+        String::from_utf8_lossy(&out.stdout).contains(image)
+    }
+
+    /// B1-4 回归：PTY kill 经 JobObject 杀整棵进程树。
+    /// 主进程 cmd.exe 启动孙进程 timeout.exe（存活 30s）；kill 后孙进程应一并终止。
+    /// （AssignProcessToJobObject 在 CI 等受限环境会降级，降级时跳过孙进程断言）
+    #[cfg(windows)]
+    #[test]
+    fn pty_kill_with_job_kills_process_tree() {
+        use crate::runner::executor::windows::{assign_process_to_job, create_kill_on_close_job};
+
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty failed");
+
+        let mut cmd = CommandBuilder::new("cmd");
+        cmd.arg("/c");
+        cmd.arg("timeout");
+        cmd.arg("/t");
+        cmd.arg("30");
+        cmd.arg("/nobreak");
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn failed");
+        let pid = child.process_id();
+        drop(pair.slave);
+        let _reader = pair.master.try_clone_reader().expect("clone reader failed");
+        let writer = pair.master.take_writer().expect("take writer failed");
+        let killer = child.clone_killer();
+
+        let job = create_kill_on_close_job().expect("create job failed");
+        let assigned = pid
+            .map(|p| assign_process_to_job(&job, p).unwrap_or(false))
+            .unwrap_or(false);
+        let work_dir = TempDir::new().expect("TempDir failed");
+        let session = PtySession::new(pair.master, writer, killer, pid, work_dir, Some(job));
+
+        // 等 cmd 完成启动孙进程 timeout.exe
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(
+            tasklist_has_image("timeout.exe"),
+            "前置条件失败：孙进程 timeout.exe 未启动"
+        );
+
+        session.kill();
+
+        // 主进程（cmd.exe）被终止
+        assert!(
+            wait_child_exit(&mut child, Duration::from_secs(5)),
+            "主进程未在 5s 内退出"
+        );
+
+        if assigned {
+            // 孙进程被 JobObject 树杀（留 500ms 让终止传播）
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(
+                !tasklist_has_image("timeout.exe"),
+                "孙进程未被 JobObject 树杀"
+            );
+        }
+
+        // Windows ConPTY: forget 避免 Drop 阻塞（同本模块既有约定）
+        std::mem::forget(child);
+        std::mem::forget(session);
     }
 }

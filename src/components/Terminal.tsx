@@ -193,6 +193,8 @@ export function buildPtyExitSequence(killedBy: string | null, signalTerminatedTe
 
 interface TerminalProps {
   runId: string | null; // PTY 会话 ID
+  // 当前活动 tab id：变化时清空终端（终端 = 当前 tab 的草稿区，不跨 tab 保留输出）
+  tabId: string | null;
   onExit: (exitCode: number | null, killedBy: string | null, maxRssKb: number | null) => void;
   fontSize?: number;
   theme?: "dark" | "light" | "custom";
@@ -253,7 +255,7 @@ export function buildXtermOptions(
 // - 用户输入通过 onData → write_pty_stdin
 // - 容器大小变化通过 ResizeObserver → resize_pty
 // - fontSize 仅在初始化时读取，运行中改设置需重启应用生效
-function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, baseMode, compileError, onFocusChange, visible = true, autoFocusSeq }: TerminalProps) {
+function Terminal({ runId, tabId, onExit, fontSize, theme, customColors, panelAlpha, baseMode, compileError, onFocusChange, visible = true, autoFocusSeq }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -507,6 +509,14 @@ function Terminal({ runId, onExit, fontSize, theme, customColors, panelAlpha, ba
     term.reset();
     term.write(`\r\n\x1b[31m${normalizeEol(formatStderrWithTranslation(compileError))}\x1b[0m\r\n`);
   }, [compileError]);
+
+  // 切换 tab 时清空终端（含回滚缓冲）：终端是当前 tab 的草稿区，不跨 tab 保留输出。
+  // reset（RIS）不清 isCursorHidden，光标可见性由 runId effect 统一管理。
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.reset();
+  }, [tabId]);
 
   // runId 变化时绑定/解绑事件 + onData
   useEffect(() => {

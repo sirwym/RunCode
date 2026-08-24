@@ -5,7 +5,7 @@ import { useRunManager } from "../hooks/useRunManager";
 import { useTestOptions } from "../hooks/useTestOptions";
 import { useI18n } from "../hooks/useI18n";
 import { getT } from "../hooks/useI18n";
-import { X, FolderOpen, FileArchive, Plus, Square, Play, Upload, Check, AlertTriangle, GitCompare, Clock } from "lucide-react";
+import { X, FolderOpen, FileArchive, Plus, Square, Play, Upload, Check, AlertTriangle, GitCompare, Clock, Copy } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import DiffDialog from "./DiffDialog";
 import type { CasePreview, TestCaseResult, KillReason, AppErrorPayload, Verdict } from "../types";
+import type { TestJudgeInfo } from "../hooks/useRunManager";
 
 // 格式化文件大小
 function formatSize(bytes: number): string {
@@ -34,10 +35,40 @@ function verdictBadge(verdict: Verdict): { className: string; icon: React.ReactN
   }
 }
 
+// 构造单例失败诊断文本（一键复制用）。
+// 技术字段（verdict/exit/diff 等）保持 OI 通用缩写原样，标签走 i18n。
+export function formatCaseDiagnostic(
+  result: TestCaseResult,
+  judge: TestJudgeInfo | undefined,
+  index: number,
+  name: string,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  const pos = judge ? `[${judge.index + 1}/${judge.total}]` : `#${index + 1}`;
+  const head = judge
+    ? `${pos} ${name} ${result.verdict.toUpperCase()} strict=${judge.case_strict} exit=${judge.exit_code} ${judge.duration_ms}/${judge.time_limit_ms}ms diff=${judge.first_diff} len=${judge.expected_len}/${judge.actual_len}`
+    : `${pos} ${name} ${result.verdict.toUpperCase()} exit=${result.exit_code} ${result.duration_ms}ms diff=${result.first_diff}`;
+  const lines = [head];
+  if (judge?.expected_esc != null && judge.actual_esc != null) {
+    lines.push(`${t("tests.expected")}: [${judge.expected_esc}]`);
+    lines.push(`${t("tests.diffActual")}: [${judge.actual_esc}]`);
+  } else {
+    // 无转义视图（输出较大）时附带实际输出摘录，期望值请走「对比差异」
+    const excerpt = result.stdout.slice(0, 512);
+    lines.push(`${t("tests.diffActual")}: ${excerpt}${result.stdout.length > 512 ? "…" : ""}`);
+  }
+  if (result.stderr) {
+    lines.push(`stderr: ${result.stderr.slice(0, 512)}${result.stderr.length > 512 ? "…" : ""}`);
+  }
+  return lines.join("\n");
+}
+
 interface CardProps {
   index: number;
   preview: CasePreview;
   result: TestCaseResult | undefined;
+  /** 本例判定诊断（仅当 judgeInfo 与当前 testResult 同 run 时传入） */
+  judge: TestJudgeInfo | undefined;
   isCurrent: boolean; // 是否为当前正在运行的用例
   selected: boolean; // 是否选中参与多样例测试
   onToggleSelected: (id: string) => void;
@@ -51,6 +82,7 @@ const TestCaseCard = memo(function TestCaseCard({
   index,
   preview,
   result,
+  judge,
   isCurrent,
   selected,
   onToggleSelected,
@@ -124,6 +156,27 @@ const TestCaseCard = memo(function TestCaseCard({
     setLocalExpected(e.target.value);
     pendingRef.current.expected = e.target.value;
     scheduleUpdate();
+  };
+
+  // 复制诊断反馈：ok / fail / null（1.5s 自动复位）
+  const [copyState, setCopyState] = useState<"ok" | "fail" | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+  const handleCopyDiag = async () => {
+    if (!result) return;
+    const text = formatCaseDiagnostic(result, judge, index, preview.name, t);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState("ok");
+    } catch {
+      setCopyState("fail");
+    }
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopyState(null), 1500);
   };
 
   const diffPos = result?.first_diff ?? null;
@@ -257,12 +310,35 @@ const TestCaseCard = memo(function TestCaseCard({
             <GitCompare size={12} />
             {t("tests.compareDiff")}
           </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => void handleCopyDiag()}
+            title={copyState ? t(copyState === "ok" ? "tests.copyDiagOk" : "tests.copyDiagFail") : t("tests.copyDiagnosis")}
+          >
+            {copyState === "ok" ? <Check size={12} /> : copyState === "fail" ? <AlertTriangle size={12} /> : <Copy size={12} />}
+            {copyState ? t(copyState === "ok" ? "tests.copyDiagOk" : "tests.copyDiagFail") : t("tests.copyDiagnosis")}
+          </button>
           {result.killed_by && (
             <div className="diff-killed">
               <AlertTriangle size={12} /> {t("tests.diffKilled", {
                 reason: t(`killed.${result.killed_by as KillReason}`),
               })}
             </div>
+          )}
+          {/* 转义诊断：空格=· 换行=\n 等，让不可见字符差异肉眼可见 */}
+          {judge && judge.expected_esc != null && judge.actual_esc != null && (
+            <details className="testcase-judge-details">
+              <summary>{t("tests.diagnosis")}</summary>
+              <div className="judge-esc-row">
+                <span className="judge-esc-label">{t("tests.expected")}</span>
+                <pre className="diff-pre judge-esc-pre">{judge.expected_esc}</pre>
+              </div>
+              <div className="judge-esc-row">
+                <span className="judge-esc-label">{t("tests.diffActual")}</span>
+                <pre className="diff-pre judge-esc-pre">{judge.actual_esc}</pre>
+              </div>
+              <div className="judge-esc-legend">{t("tests.diagLegend")}</div>
+            </details>
           )}
           {result.stderr && (
             <details className="testcase-stderr-details">
@@ -322,6 +398,13 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
     }
     return m;
   }, [result]);
+
+  const judgeInfo = useRunManager((s) => s.judgeInfo);
+  // 仅当诊断与展示的 testResult 属同一次运行时才配套（防旧快照串新诊断）
+  const judgeMap = useMemo(() => {
+    if (!judgeInfo || !result || judgeInfo.runId !== result.run_id) return null;
+    return judgeInfo.byCase;
+  }, [judgeInfo, result]);
 
   const handleCompare = useCallback(async (caseId: string, caseName: string) => {
     setDiffState({ open: true, caseId, caseName, expectedFull: "", loading: true, error: null });
@@ -541,6 +624,7 @@ function TestCasesPanel({ onRunTests }: PanelProps) {
               index={idx}
               preview={pv}
               result={resultMap.get(pv.id)}
+              judge={judgeMap ? judgeMap[pv.id] : undefined}
               isCurrent={
                 isRunning &&
                 testProgress?.status === "running" &&

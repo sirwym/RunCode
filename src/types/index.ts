@@ -7,7 +7,7 @@ export type KillReason = "timeout" | "signal" | "cancelled";
 // 与 Rust 端 error.rs AppError 对应（{ code, params } 结构）
 export interface AppErrorPayload {
   code: string;
-  params?: Record<string, string>;
+  params?: Record<string, string | number>;
 }
 
 export type RunStage = "compile_failed" | "ran";

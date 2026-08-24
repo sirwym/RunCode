@@ -15,6 +15,12 @@ pub enum AppError {
     CompilerNotFound { detail: String },
     Io { detail: String },
     ProcessGroup { detail: String },
+    /// 流程图：源码中未找到函数定义（引导用户检查代码）
+    CfgNoFunction,
+    /// 文件不是 UTF-8 编码（可能为 GBK/ANSI），明确报错而非静默乱码
+    InvalidEncoding,
+    /// 文件超过大小上限（size 字节 / max_mb MB）
+    FileTooLarge { size: u64, max_mb: u64 },
     Cancelled,
     Other { detail: String },
 }
@@ -25,6 +31,11 @@ impl std::fmt::Display for AppError {
             AppError::CompilerNotFound { detail } => write!(f, "找不到编译器: {detail}"),
             AppError::Io { detail } => write!(f, "IO 错误: {detail}"),
             AppError::ProcessGroup { detail } => write!(f, "进程组操作失败: {detail}"),
+            AppError::CfgNoFunction => write!(f, "未找到函数定义"),
+            AppError::InvalidEncoding => write!(f, "文件不是 UTF-8 编码"),
+            AppError::FileTooLarge { size, max_mb } => {
+                write!(f, "文件大小 {size} 字节超过 {max_mb}MB 上限")
+            }
             AppError::Cancelled => write!(f, "已取消"),
             AppError::Other { detail } => write!(f, "{detail}"),
         }
@@ -42,5 +53,28 @@ impl From<std::io::Error> for AppError {
 impl From<AppError> for String {
     fn from(e: AppError) -> Self {
         e.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 前后端错误码契约：序列化形状必须与前端 errors.* i18n 键对齐。
+    /// unit variant 不含 params 字段（前端须用可选链读取）
+    #[test]
+    fn serialize_contract() {
+        assert_eq!(
+            serde_json::to_string(&AppError::CfgNoFunction).unwrap(),
+            r#"{"code":"cfg_no_function"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&AppError::InvalidEncoding).unwrap(),
+            r#"{"code":"invalid_encoding"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&AppError::FileTooLarge { size: 123, max_mb: 10 }).unwrap(),
+            r#"{"code":"file_too_large","params":{"size":123,"max_mb":10}}"#
+        );
     }
 }

@@ -375,9 +375,10 @@ function App() {
   // 切换 active tab 时，切换 Monaco model + 关联测试套件
   // Fix P1-3：依赖改为 [activeId]，避免每次输入触发；从 getState 读 tab 信息；防并发 + 串台校验
   useEffect(() => {
-    if (!activeId) return;
-    // 同步当前 tab id 到 run manager，切换展示的运行结果快照（per-tab 隔离）
+    // 同步当前 tab id 到 run manager（含 null：关闭最后一个 tab 也终止运行）。
+    // 切换即放弃当前运行 + 清空发起 tab 快照，见 useRunManager.setActiveTab
     useRunManager.getState().setActiveTab(activeId);
+    if (!activeId) return;
     const tab = useTabs.getState().tabs.find((t) => t.id === activeId);
     if (!tab) return;
     editorRef.current?.switchModel(tab.id, tab.content, tab.language);
@@ -1113,6 +1114,7 @@ function App() {
             <section style={{ display: tab === "terminal" ? undefined : "none" }}>
               <Terminal
                 runId={ptyRunId}
+                tabId={activeId}
                 onExit={handlePtyExit}
                 fontSize={settings?.editor.terminal_font_size}
                 theme={effectiveTheme}
